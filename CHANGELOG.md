@@ -9,6 +9,8 @@ versioning where practical.
 
 ## Unreleased
 
+## 0.6.1 - 2026-09-13
+
 ### Security
 
 - Human-readable output escapes clipboard terminal controls, including clipboard-setting escape sequences, cursor manipulation and bidirectional overrides. Structured output and exported source bytes retain their original content.
