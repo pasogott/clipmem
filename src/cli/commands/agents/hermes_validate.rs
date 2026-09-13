@@ -17,7 +17,7 @@ use super::package::packaged_hermes_skill;
 
 pub(in crate::cli) fn hermes_doctor(args: &HermesDoctorArgs) -> Result<()> {
     let report = build_hermes_doctor_report(args)?;
-    print!("{}", render_hermes_doctor_report(&report));
+    display!("{}", render_hermes_doctor_report(&report));
 
     if report
         .checks

@@ -10,6 +10,7 @@ struct ClipmemMenuBarApp: App {
     var body: some Scene {
         MenuBarExtra {
             MenuBarPanelView(appModel: appModel)
+                .id(appModel.configurationGeneration)
                 .frame(width: 400, height: 520)
         } label: {
             ClipmemMenuBarLabel(
@@ -29,6 +30,7 @@ struct ClipmemMenuBarApp: App {
 
         WindowGroup("History", id: WindowID.history.rawValue) {
             HistoryWindowView(appModel: appModel)
+                .id(appModel.configurationGeneration)
                 .frame(minWidth: 880, idealWidth: 1160, minHeight: 600, idealHeight: 740)
                 .modifier(WindowFrameLimiter(maxVisibleWidthInset: 48, maxVisibleHeightInset: 64))
         }
@@ -42,6 +44,7 @@ struct ClipmemMenuBarApp: App {
 
         Window("Quick Recall", id: WindowID.quickRecall.rawValue) {
             QuickRecallWindowView(appModel: appModel)
+                .id(appModel.configurationGeneration)
                 .frame(width: 720, height: 520)
         }
         .keyboardShortcut("v", modifiers: [.option, .shift])

@@ -41,7 +41,7 @@ fn v23_rebuild_indexes_blob_backed_producer_text_uti() -> Result<()> {
         |row| row.get(0),
     )?;
 
-    assert_eq!(builder_version, 3);
+    assert_eq!(builder_version, 4);
     assert_eq!(
         db.search_literal("acme,eu-central", 10, &unfiltered())?
             .hits()

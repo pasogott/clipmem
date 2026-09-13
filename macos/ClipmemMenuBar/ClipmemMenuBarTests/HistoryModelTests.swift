@@ -3,6 +3,45 @@ import Testing
 @testable import ClipmemMenuBar
 
 struct HistoryModelTests {
+    @Test @MainActor
+    func archiveSwitchRejectsOldHistoryResultsAndActions() async {
+        let app = AppModel(loadRecentPreview: { [] })
+        let history = HistoryModel(
+            appModel: app,
+            pageLoader: { _, _, _, _ in
+                app.adoptConfiguration(ClipmemClientConfiguration(databaseOverride: "/synthetic/other.sqlite", allowsSubprocessExecution: false))
+                return ([Self.item(snapshotID: 1)], nil)
+            },
+            detailLoader: { Self.detail(snapshotID: $0) }
+        )
+        await history.reload()
+        #expect(history.results.isEmpty)
+        await history.forget(snapshotID: 1)
+        #expect(app.lastError == nil)
+        #expect(app.configurationGeneration == 1)
+        #expect(app.recentPreview.isEmpty)
+    }
+
+    @Test @MainActor
+    func failedSelectionNeverRetainsPreviousSnapshotDetail() async {
+        let history = HistoryModel(
+            appModel: AppModel(loadRecentPreview: { [] }),
+            pageLoader: { _, _, _, _ in ([Self.item(snapshotID: 1), Self.item(snapshotID: 2)], nil) },
+            detailLoader: { id in
+                if id == 2 { throw NSError(domain: "detail unavailable", code: 1) }
+                return Self.detail(snapshotID: id)
+            }
+        )
+        await history.reload()
+        #expect(history.selectedDetail?.snapshotId == 1)
+        history.selectRow(id: history.results[1].id)
+        #expect(history.selectedDetail == nil)
+        await history.loadSelectedDetail()
+        #expect(history.selectedID == 2)
+        #expect(history.selectedDetail == nil)
+        #expect(history.error != nil)
+    }
+
     @Test func previewDescriptorInvalidatesForContentAndProjectionVersions() {
         let representation = ImagePreviewRepresentation(
             itemIndex: 0,

@@ -13,7 +13,15 @@ final class HistoryModel {
     var query = ""
     var filters = RetrievalFilterState.defaultValue
     var results: [ClipmemItem] = []
-    var selectedID: Int?
+    var selectedID: Int? {
+        didSet {
+            guard selectedID != oldValue else { return }
+            detailTask?.cancel()
+            detailGeneration += 1
+            selectedDetail = nil
+            isLoadingDetail = false
+        }
+    }
     var selectedRowID: String?
     var selectedDetail: SnapshotDetails?
     var nextCursor: String?
@@ -21,6 +29,7 @@ final class HistoryModel {
     var isLoadingDetail = false
     var error: UserError?
 
+    let configurationGeneration: Int
     @ObservationIgnored private let appModel: AppModel
     @ObservationIgnored private let pageLoader: HistoryPageLoader?
     @ObservationIgnored private let detailLoader: HistoryDetailLoader
@@ -40,6 +49,7 @@ final class HistoryModel {
         let displayState = DisplayMode.from(queryMode: historyMode)
         searchStyle = displayState.searchStyle
         resultScope = HistoryResultScope.from(queryMode: historyMode)
+        self.configurationGeneration = appModel.configurationGeneration
         self.appModel = appModel
         self.pageLoader = pageLoader
         self.detailLoader = detailLoader ?? { snapshotID in
@@ -137,6 +147,7 @@ final class HistoryModel {
                 selectedDetail = nil
             }
             error = nil
+            await loadSelectedDetail()
         } catch is CancellationError {
         } catch {
             guard isCurrent(request) else { return }
@@ -190,6 +201,7 @@ final class HistoryModel {
         detailTask?.cancel()
         detailGeneration += 1
         let generation = detailGeneration
+        selectedDetail = nil
         guard let selectedID else {
             selectedDetail = nil
             return
@@ -204,26 +216,28 @@ final class HistoryModel {
             let task = Task { try await detailLoader(selectedID) }
             detailTask = task
             let detail = try await task.value
-            guard generation == detailGeneration, self.selectedID == selectedID else { return }
+            guard configurationGeneration == appModel.configurationGeneration, generation == detailGeneration, self.selectedID == selectedID else { return }
             selectedDetail = detail
             error = nil
         } catch is CancellationError {
         } catch {
-            guard generation == detailGeneration, self.selectedID == selectedID else { return }
+            guard configurationGeneration == appModel.configurationGeneration, generation == detailGeneration, self.selectedID == selectedID else { return }
             self.error = UserError(error)
         }
     }
 
     func restoreSelected() async {
+        guard configurationGeneration == appModel.configurationGeneration else { return }
         guard let selectedItem else { return }
         await appModel.restore(selectedItem)
     }
 
-    func forgetSelected() async {
-        guard let selectedID else { return }
-        let selectedIndex = results.firstIndex { $0.snapshotId == selectedID } ?? 0
-        guard await appModel.forget(snapshotID: selectedID) else { return }
-        results.removeAll { $0.snapshotId == selectedID }
+    func forget(snapshotID: Int) async {
+        guard configurationGeneration == appModel.configurationGeneration else { return }
+        let selectedIndex = results.firstIndex { $0.snapshotId == snapshotID } ?? 0
+        guard await appModel.forget(snapshotID: snapshotID) else { return }
+        results.removeAll { $0.snapshotId == snapshotID }
+        guard selectedID == snapshotID else { return }
         let adjacentIndex = min(selectedIndex, max(results.count - 1, 0))
         self.selectedID = results.isEmpty ? nil : results[adjacentIndex].snapshotId
         selectedRowID = results.isEmpty ? nil : results[adjacentIndex].id
@@ -271,7 +285,8 @@ final class HistoryModel {
     }
 
     private func isCurrent(_ request: HistoryRequest) -> Bool {
-        request.generation == loadGeneration
+        configurationGeneration == appModel.configurationGeneration
+            && request.generation == loadGeneration
             && request.mode == resolvedMode
             && request.query == query
             && request.filters == filters

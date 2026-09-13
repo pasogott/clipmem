@@ -1,22 +1,17 @@
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 
 use crate::cli::schema::{OpenClawInstallSkillArgs, OpenClawUninstallSkillArgs};
 
 use super::package::{packaged_openclaw_files, resolve_openclaw_skill_dir};
-use super::support::install_packaged_skill;
+use super::support::{install_packaged_skill, uninstall_packaged_skill, validate_installed_skill};
 
 pub(in crate::cli) fn openclaw_install_skill(args: &OpenClawInstallSkillArgs) -> Result<()> {
     let target_dir = resolve_openclaw_skill_dir(args.dest.as_deref(), args.shared)?;
     if target_dir.exists() {
         if args.force {
-            std::fs::remove_dir_all(&target_dir).with_context(|| {
-                format!(
-                    "failed to remove existing skill at {}",
-                    target_dir.display()
-                )
-            })?;
+            validate_installed_skill(&target_dir, packaged_openclaw_files())?;
         } else {
             return Err(anyhow!(
                 "skill directory already exists at {} (pass --force to replace it)",
@@ -27,9 +22,9 @@ pub(in crate::cli) fn openclaw_install_skill(args: &OpenClawInstallSkillArgs) ->
 
     install_openclaw_package(&target_dir)?;
 
-    println!("Installed OpenClaw skill into {}", target_dir.display());
-    println!("Skill file: {}", target_dir.join("SKILL.md").display());
-    println!(
+    displayln!("Installed OpenClaw skill into {}", target_dir.display());
+    displayln!("Skill file: {}", target_dir.join("SKILL.md").display());
+    displayln!(
         "Reload OpenClaw skills or restart OpenClaw if the skill does not appear immediately."
     );
     Ok(())
@@ -38,13 +33,12 @@ pub(in crate::cli) fn openclaw_install_skill(args: &OpenClawInstallSkillArgs) ->
 pub(in crate::cli) fn openclaw_uninstall_skill(args: &OpenClawUninstallSkillArgs) -> Result<()> {
     let target_dir = resolve_openclaw_skill_dir(args.dest.as_deref(), args.shared)?;
     if !target_dir.exists() {
-        println!("No installed skill found at {}", target_dir.display());
+        displayln!("No installed skill found at {}", target_dir.display());
         return Ok(());
     }
 
-    std::fs::remove_dir_all(&target_dir)
-        .with_context(|| format!("failed to remove {}", target_dir.display()))?;
-    println!("Removed OpenClaw skill from {}", target_dir.display());
+    uninstall_packaged_skill(&target_dir, packaged_openclaw_files())?;
+    displayln!("Removed OpenClaw skill from {}", target_dir.display());
     Ok(())
 }
 

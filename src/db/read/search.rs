@@ -107,7 +107,20 @@ fn map_unified_search_hit_row(
     } else {
         (None, None)
     };
-    let snippet_source = hit.matched_fields().first().cloned();
+    let snippet_source = match hit.why_matched() {
+        Some("Exact phrase match in OCR text") => Some("ocr_text".to_string()),
+        Some(
+            "Exact phrase match in best text"
+            | "Exact text match in best text"
+            | "Prefix match in best text"
+            | "Phrase match in best text",
+        ) => Some("native_text".to_string()),
+        Some("Exact URL match") => Some("urls".to_string()),
+        Some("Path fragment match in file paths") => Some("file_paths".to_string()),
+        Some("Bundle ID match") => Some("historical_app_bundle_id".to_string()),
+        Some("App name match") => Some("historical_app".to_string()),
+        _ => hit.matched_fields().first().cloned(),
+    };
     let snippet_text = hit.why_matched().map(ToOwned::to_owned);
     let evidence = MatchEvidence::new(
         hit.matched_fields().to_vec(),

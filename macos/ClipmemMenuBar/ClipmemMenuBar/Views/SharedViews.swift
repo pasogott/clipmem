@@ -358,6 +358,7 @@ struct FilterBar: View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             HStack(spacing: Spacing.md) {
                 Picker("Time", selection: $history.filters.hours) {
+                    Text("All Time").tag(0)
                     ForEach(Self.timeRanges, id: \.1) { label, hours in
                         Text(label).tag(hours)
                     }

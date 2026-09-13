@@ -109,7 +109,15 @@ impl FlattenedTextProjection {
                     }
                 }
                 let projected_text = projected.text;
-                let Some(fragment_text) = normalize_nonempty_display_text(&projected_text) else {
+                let fragment_text = if matches!(
+                    representation.kind(),
+                    ClipboardKind::PlainText | ClipboardKind::Json | ClipboardKind::Xml
+                ) {
+                    (!projected_text.trim().is_empty()).then_some(projected_text)
+                } else {
+                    normalize_nonempty_display_text(&projected_text)
+                };
+                let Some(fragment_text) = fragment_text else {
                     continue;
                 };
 
@@ -613,5 +621,35 @@ mod tests {
 
         assert!(projection.text_fragments().is_empty());
         assert_eq!(projection.urls(), &["https://example.com/target"]);
+    }
+}
+
+#[cfg(test)]
+mod source_fidelity_tests {
+    use super::*;
+    use crate::model::{build_item, build_representation};
+
+    #[test]
+    fn plain_json_and_xml_copy_text_preserves_exact_whitespace() {
+        for (uti, text) in [
+            (
+                "public.utf8-plain-text",
+                "  def run():\r\n\tprint(\"a  b\")\r\n",
+            ),
+            ("public.json", "{\n  \"value\": \"a  b\"\n}\n"),
+            ("public.xml", "<text xml:space=\"preserve\"> a  b </text>\n"),
+        ] {
+            let items = [build_item(
+                0,
+                vec![build_representation(
+                    uti.into(),
+                    Some(text.into()),
+                    text.as_bytes().to_vec(),
+                )],
+            )];
+            let projection = FlattenedTextProjection::from_items(&items);
+            assert_eq!(projection.best_text(), text, "{uti}");
+            assert_eq!(projection.text_fragments()[0].text(), text, "{uti}");
+        }
     }
 }

@@ -98,7 +98,7 @@ fn search_propagates_non_syntax_fts_failures() -> Result<()> {
 
 #[test]
 fn migration_backfills_unified_search_documents_from_supported_versions() -> Result<()> {
-    for source_version in [0_i64, 11, 13, 18, 20, 21, 22, 23] {
+    for source_version in [0_i64, 11, 13, 18, 20, 21, 22, 23, 24] {
         let path = temp_db_path(&format!("unified-search-v{source_version}"));
         {
             let mut db = Database::open_or_init(&path)?;
@@ -111,7 +111,7 @@ fn migration_backfills_unified_search_documents_from_supported_versions() -> Res
         }
         let db = Database::open_or_init_and_migrate(&path)?;
         let count: i64 = db.conn.query_row(
-            "SELECT COUNT(*) FROM snapshot_search_documents WHERE builder_version = 3",
+            "SELECT COUNT(*) FROM snapshot_search_documents WHERE builder_version = 4",
             [],
             |row| row.get(0),
         )?;

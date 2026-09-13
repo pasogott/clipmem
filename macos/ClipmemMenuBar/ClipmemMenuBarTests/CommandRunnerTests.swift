@@ -23,6 +23,22 @@ struct CommandRunnerTests {
         }
         #expect(processStarted.value == false)
     }
+    @Test func maintenanceDeadlinesUseCommandCategoryNotQueryText() {
+        #expect(CommandRunner.defaultTimeout(arguments: ["setup"]) == .seconds(1800))
+        #expect(CommandRunner.defaultTimeout(arguments: ["--db", "/tmp/archive", "storage", "compact"]) == .seconds(1800))
+        #expect(CommandRunner.defaultTimeout(arguments: ["settings", "retention", "7d"]) == .seconds(1800))
+        #expect(CommandRunner.defaultTimeout(arguments: ["search", "--", "compact"]) == .seconds(60))
+    }
+
+    @Test func deadlineDoesNotWaitForTermIgnoringDescendant() async throws {
+        let start = ContinuousClock.now
+        do {
+            _ = try await CommandRunner().run(executable: "/bin/sh", arguments: ["-c", "(trap '' TERM; sleep 2) & wait"], timeout: .milliseconds(50))
+            Issue.record("Expected deadline despite a TERM-ignoring descendant")
+        } catch is CommandTimeoutError {}
+        #expect(start.duration(to: .now) < .seconds(1.5))
+    }
+
     @Test func timeoutIsDistinctFromUserCancellation() async throws {
         do {
             _ = try await CommandRunner().run(
@@ -37,6 +53,24 @@ struct CommandRunnerTests {
             Issue.record("Expected CommandTimeoutError, got \(error).")
         }
     }
+    @Test func deadlineStopsWaitingForInheritedPipesAfterParentExits() async throws {
+        let start = ContinuousClock.now
+        do {
+            _ = try await CommandRunner().run(executable: "/bin/sh", arguments: ["-c", "sleep 2 & exit 0"], timeout: .milliseconds(50))
+            Issue.record("Expected inherited pipe deadline")
+        } catch is CommandTimeoutError {}
+        #expect(start.duration(to: .now) < .seconds(1))
+    }
+
+    @Test func streamingDeadlineStopsWaitingForInheritedPipes() async throws {
+        let start = ContinuousClock.now
+        do {
+            _ = try await CommandRunner().runStreaming(executable: "/bin/sh", arguments: ["-c", "sleep 2 & exit 0"], timeout: .milliseconds(50)) { _ in }
+            Issue.record("Expected inherited pipe deadline")
+        } catch is CommandTimeoutError {}
+        #expect(start.duration(to: .now) < .seconds(1))
+    }
+
     @Test func drainsLargeStdoutAndStderrBeforeWaiting() async throws {
         let byteCount = 200_000
         let script = "print \"o\" x \(byteCount); print STDERR \"e\" x \(byteCount);"
@@ -483,12 +517,46 @@ struct HistoryExternalRefreshTests {
 
 @MainActor
 struct QuickRecallModelTests {
+    @Test func arrowNavigationDistinguishesRepeatedCopies() {
+        let model = QuickRecallModel(appModel: AppModel())
+        var first = Self.item(1)
+        first.eventId = 101
+        var second = Self.item(1)
+        second.eventId = 102
+        model.results = [first, second, Self.item(2)]
+        model.selectRow(id: first.id)
+        model.moveSelection(1)
+        #expect(model.selectedItem?.eventId == 102)
+        model.moveSelection(1)
+        #expect(model.selectedID == 2)
+    }
+
+    @Test func olderRequestCannotReplaceNewQueryResults() async {
+        var pending: CheckedContinuation<[ClipmemItem], Error>?
+        let model = QuickRecallModel(appModel: AppModel(), resultLoader: { _, query in
+            if query == "old" {
+                return try await withCheckedThrowingContinuation { pending = $0 }
+            }
+            return [Self.item(2)]
+        })
+        model.query = "old"
+        let old = Task { await model.refresh() }
+        while pending == nil { await Task.yield() }
+        model.query = "new"
+        #expect(model.selectedItem == nil)
+        await model.refresh()
+        pending?.resume(returning: [Self.item(1)])
+        await old.value
+        #expect(model.results.map(\.snapshotId) == [2])
+        #expect(model.selectedID == 2)
+    }
+
     @Test func forgetExplicitItemDoesNotDependOnSelection() async {
         var forgottenIDs: [Int] = []
-        let model = QuickRecallModel(appModel: AppModel()) { item in
+        let model = QuickRecallModel(appModel: AppModel(), forgetItem: { item in
             forgottenIDs.append(item.snapshotId)
             return true
-        }
+        })
         model.results = [Self.item(1), Self.item(2)]
         model.selectedID = 1
 
@@ -501,10 +569,10 @@ struct QuickRecallModelTests {
 
     @Test func failedForgetLeavesResultsAndSelectionUnchanged() async {
         var forgottenIDs: [Int] = []
-        let model = QuickRecallModel(appModel: AppModel()) { item in
+        let model = QuickRecallModel(appModel: AppModel(), forgetItem: { item in
             forgottenIDs.append(item.snapshotId)
             return false
-        }
+        })
         model.results = [Self.item(1), Self.item(2)]
         model.selectedID = 2
 

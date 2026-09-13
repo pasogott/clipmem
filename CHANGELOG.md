@@ -9,9 +9,65 @@ versioning where practical.
 
 ## Unreleased
 
+### Security
+
+- Human-readable output escapes clipboard terminal controls, including clipboard-setting escape sequences, cursor manipulation and bidirectional overrides. Structured output and exported source bytes retain their original content.
+- SQLite and all full-text indexes now use secure deletion. Migration rebuilds old full-text tombstones; Forget followed by Compact removes deleted text from the live archive file and WAL. Backups and filesystem snapshots remain separate copies.
+- Export temporary files are private (0600) from creation, including while data is being written.
+- Setup validates existing database ownership before changing schema, journal mode or permissions. It no longer changes permissions on an existing custom parent directory.
+- API-key filtering inspects raw textual clipboard representations as well as extracted text, catching secrets hidden in HTML attributes or alternate clipboard formats.
+- Capture always honors concealed, transient, automatically generated and 1Password clipboard markers, including empty marker payloads on secondary items.
+- Skill replacement and uninstall now reject unrecognized directories and symlinked paths. Uninstall removes only packaged files, preserving unrelated user files.
+
+### Fixed
+
+- Paused capture is reported as paused by the packaged setup checker; sandbox diagnostics validate OpenClaw's JSON mode instead of guessing from prose.
+- Recall's recent preference uses capture timestamps, recent fallbacks have no fabricated match score, and full recall text survives human and TOON output.
+- Search snippets identify the field that supplied their evidence, and text pagination exposes continuation cursors.
+- HTML projection handles named and multi-character entities and nested hidden elements; RTF preserves nonbreaking-space and hyphen controls.
+- CLI output handles early-closing pipes without panicking; display formats escape terminal controls, Markdown tables retain multiline cells, and TOON conforms to the official decoder with string types preserved.
+- Periodic update checks run throughout an app session and include failure backoff.
+- App preference archive paths are validated before preferences are saved. Development launches use their own archive and watcher without stopping production services or altering the login session environment.
+- Native command cancellation and deadlines stop pipe readers even when a descendant process holds stdout open. Ordinary commands have a 60-second deadline; setup, storage, OCR, purge and retention maintenance allow 30 minutes.
+- Invalid full-text query syntax produces a query-specific error with literal-search guidance, instead of recommending database replacement.
+- TOON output uses standard array-length headers and quotes strings that could be misread as booleans, null, numbers, comments or structural syntax. Control characters, including backspace and form feed, use TOON-supported escapes.
+- GitHub releases remain drafts until the native app is built, tested and notarized and crate release verification succeeds. Homebrew publication waits for that verified public release.
+- Service Stop and Uninstall resolve conflicting direct and Homebrew watchers by stopping both owned providers, instead of rejecting the recovery command.
+- LaunchAgent configuration stores absolute archive and log paths. Skill discovery expands home-relative paths and respects custom OpenClaw state and Hermes home directories.
+- Forget from the menu panel requires confirmation for the selected snapshot, matching History and Quick Recall.
+- Command-click link hit-testing uses the text view’s top-down coordinates. Quick Recall keyboard navigation distinguishes repeated copies of the same snapshot, and History reloads selected detail after OCR changes.
+- Combined app-name and bundle-ID filters must match the same copy event.
+- Non-ASCII duration inputs and out-of-range hour filters return validation errors instead of panicking.
+- Quick Recall cancels superseded requests, rejects late results and clears stale selections while searching.
+- History and Quick Recall search the full archive by default. History exposes All Time; the menu preview keeps the configured recent window.
+- Active OCR jobs renew their leases during recognition. Exhausted leases update the visible OCR result and snapshot cache to Failed instead of leaving images permanently Pending.
+- The watcher owns a persistent OCR worker that resumes queued jobs after restart and wakes for retries. Disabling OCR stops subsequent automatic jobs, and automatic processing no longer discovers historical images.
+- Capture Once waits for its snapshot's queued OCR, including work claimed by the watcher, and reports pending work explicitly when its 30-second waiting budget expires. The deadline is checked between images; an in-progress recognition finishes before returning. OCR batches claim images one at a time, avoiding premature lease expiry and eager loading of whole batches.
+- Retention applies immediately when changed, at watcher startup, and every 30 seconds while the watcher runs, including while capture is paused or the clipboard is idle.
+- Read-only archive opens retain SQLite locking and WAL visibility on failure instead of silently reopening a live database as immutable.
+- Failed macOS restores no longer perform automatic clipboard rollback: AppKit cannot atomically verify ownership before clearing, so rollback could erase an intervening user copy.
+- Capture health uses the current pause setting immediately and rechecks watcher liveness at least every 30 seconds, even when a crashed watcher cannot publish a revision.
+- Restore, Forget and preview-refresh errors are visible in History, Quick Recall, Settings and the menu panel. Failed restores keep the menu open.
+- Search rejects cursors after archive content, OCR or storage changes, and rejects cursors from a different archive, instead of silently skipping results as full-text ranks move.
+- Watchers retry empty or unavailable clipboard generations and incomplete promised formats, report denied macOS clipboard access, and stop reading clipboard content while paused.
+- Malformed RTF controls containing non-ASCII characters produce a diagnostic instead of crashing clipboard capture.
+- Copy Text preserves original indentation, tabs, line endings and whitespace inside plain text, JSON and XML. Schema migration rebuilds existing search documents with projection version 4.
+- Recall retains matching quoted and Boolean queries even when their confidence is uncalibrated; recent fallback suggestions no longer present recency scores as query-match confidence.
+- Schema v25 keeps durable snapshot and copy-event ID counters, preventing deleted IDs from being assigned to new captures. Existing archives seed the counters from their current IDs.
+- Archive path edits now require an explicit, validated Apply. Switching archives invalidates open history and recall sessions and rejects their stale requests and actions.
+- History clears stale details when selection changes or loading fails, and Forget confirmation retains the snapshot it was opened for.
+
+### Performance
+
+- Preview optimization claims and loads one image at a time, caps source and decoded image allocation at 128 MiB each, and avoids vacuuming merely because SQLite sidecar files exist.
+- Forgetting a frequently copied snapshot skips redundant per-event cache rebuilds during cascade deletion; deleting an individual copy event still refreshes its statistics.
+- Malformed HTML with repeated opening tags or unterminated entities is processed with bounded scans instead of repeatedly scanning the remaining input.
+
 ### Changed
 
-- Updated the ClawHub `clipboard-memory` skill package to 1.3.8 so setup
+- Refresh compatible Rust dependencies, GitHub Actions, ClawHub CLI (0.23.3), and cargo-dist (0.33.0); retain Rust 1.88 compatibility and add latest-stable CI coverage. Use Servo's HTML5 entity table for rich-text projection.
+- Package clipboard-memory skill 1.3.9 with updated health checks and service instructions.
+- Updated the ClawHub `clipboard-memory` skill package to 1.3.9 so setup
   guidance no longer promises an implicit clipboard capture and directs
   explicit current-clipboard capture through `clipmem capture-once`.
 

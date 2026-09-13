@@ -13,18 +13,19 @@ categories = ["command-line-utilities", "database"]
 keywords = ["clipboard", "sqlite", "macos", "cli", "search"]
 
 [dependencies]
-anyhow = "1.0"
-clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+web_atoms = "0.3.0"
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "webp"] }
-rusqlite = { version = "0.39", features = ["bundled", "hooks"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+rusqlite = { version = "0.40.2", features = ["bundled", "hooks"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 sha2 = "0.10"
-time = { version = "0.3.47", features = ["formatting", "parsing"] }
+time = { version = "0.3.55", features = ["formatting", "parsing"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6.2"
+objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSPasteboard", "NSPasteboardItem", "NSWorkspace", "NSRunningApplication"] }
 objc2-vision = { version = "0.3.2", default-features = false, features = ["VNObservation", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSData", "NSDictionary", "NSString"] }

@@ -77,6 +77,11 @@ impl Database {
                 });
             }
         }
+        if sensitive::has_private_clipboard_marker(snapshot) {
+            tx.commit()
+                .context("commit private clipboard marker decision")?;
+            return Ok(CaptureOutcome::SkippedPrivateMarker);
+        }
         if api_key_filter_enabled && sensitive::should_skip_snapshot_for_api_key_filter(snapshot) {
             tx.commit().context("commit sensitive capture decision")?;
             return Ok(CaptureOutcome::SkippedSensitive);
@@ -219,13 +224,13 @@ fn store_capture_tx(
     let inserted_snapshot_id: Option<i64> = tx
         .query_row(
             "INSERT INTO snapshots (
-                    sha256,
+                    id, sha256,
                     snapshot_kind,
                     preview_text,
                     search_text,
                     item_count,
                     total_bytes
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                ) VALUES ((SELECT high_water + 1 FROM archive_id_sequences WHERE name = 'snapshots'), ?1, ?2, ?3, ?4, ?5, ?6)
                 ON CONFLICT(sha256) DO NOTHING
                 RETURNING id",
             params![
@@ -262,14 +267,14 @@ fn store_capture_tx(
 
     tx.execute(
         "INSERT INTO capture_events (
-                snapshot_id,
+                id, snapshot_id,
                 change_count,
                 frontmost_app_bundle_id,
                 frontmost_app_name,
                 content_origin_bundle_id,
                 content_origin_name,
                 content_origin_kind
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            ) VALUES ((SELECT high_water + 1 FROM archive_id_sequences WHERE name = 'capture_events'), ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             snapshot_id,
             snapshot.change_count(),

@@ -32,8 +32,8 @@ fn ocr_status(db_path: &Path, args: &OcrStatusArgs) -> Result<()> {
     let report = db.ocr_status_report()?;
     match format {
         OutputFormat::Json => emit_json_or_text(true, &report, render_ocr_status_text)?,
-        OutputFormat::Human => print!("{}", render_ocr_status_human(&report)),
-        OutputFormat::Text => print!("{}", render_ocr_status_text(&report)),
+        OutputFormat::Human => display!("{}", render_ocr_status_human(&report)),
+        OutputFormat::Text => display!("{}", render_ocr_status_text(&report)),
         _ => unreachable!("unsupported ocr status format should be rejected earlier"),
     }
     Ok(())
@@ -52,8 +52,8 @@ fn ocr_run(db_path: &Path, args: &OcrRunArgs) -> Result<()> {
     )?;
     match format {
         OutputFormat::Json => emit_json_or_text(true, &report, render_ocr_run_text)?,
-        OutputFormat::Human => print!("{}", render_ocr_run_human(&report)),
-        OutputFormat::Text => print!("{}", render_ocr_run_text(&report)),
+        OutputFormat::Human => display!("{}", render_ocr_run_human(&report)),
+        OutputFormat::Text => display!("{}", render_ocr_run_text(&report)),
         _ => unreachable!("unsupported ocr run format should be rejected earlier"),
     }
     if report.processed() > 0 {
@@ -71,7 +71,7 @@ fn ocr_candidates(db_path: &Path, args: &OcrCandidatesArgs) -> Result<()> {
             emit_json_or_text(true, &candidates, |rows| render_ocr_candidates_text(rows))?
         }
         OutputFormat::Human | OutputFormat::Text => {
-            print!("{}", render_ocr_candidates_text(&candidates))
+            display!("{}", render_ocr_candidates_text(&candidates))
         }
         _ => unreachable!("unsupported ocr candidates format should be rejected earlier"),
     }
@@ -86,7 +86,7 @@ fn ocr_get(db_path: &Path, args: &OcrGetArgs) -> Result<()> {
     })?;
     match format {
         OutputFormat::Json => emit_json_or_text(true, &result, render_ocr_result_text)?,
-        OutputFormat::Human | OutputFormat::Text => print!("{}", render_ocr_result_text(&result)),
+        OutputFormat::Human | OutputFormat::Text => display!("{}", render_ocr_result_text(&result)),
         _ => unreachable!("unsupported ocr get format should be rejected earlier"),
     }
     Ok(())
@@ -104,8 +104,8 @@ fn ocr_clear(db_path: &Path, args: &OcrClearArgs) -> Result<()> {
     let report = db.ocr_status_report()?;
     match format {
         OutputFormat::Json => emit_json_or_text(true, &report, render_ocr_status_text)?,
-        OutputFormat::Human => print!("{}", render_ocr_status_human(&report)),
-        OutputFormat::Text => print!("{}", render_ocr_status_text(&report)),
+        OutputFormat::Human => display!("{}", render_ocr_status_human(&report)),
+        OutputFormat::Text => display!("{}", render_ocr_status_text(&report)),
         _ => unreachable!("unsupported ocr clear format should be rejected earlier"),
     }
     notify_app_refresh();

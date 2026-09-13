@@ -88,7 +88,7 @@ clipmem setup
 Homebrew users can also run:
 
 ```bash
-brew services start clipmem
+clipmem service start
 ```
 
 Then copy a new piece of text and retry the Hermes query.

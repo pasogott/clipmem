@@ -82,7 +82,12 @@ fn build_recall_envelope(
     // Complex explicit FTS queries have no per-hit quality; the legacy
     // enum/score contract stays in its old domain and the additive
     // match_kind field carries the honest semantics.
-    let match_kind = if recall.best.match_quality.is_some() {
+    let recent_fallback = args.query.is_some()
+        && matches!(recall.best.source, RecallCandidateSource::Recent)
+        && recall.best.match_quality.is_none();
+    let match_kind = if recent_fallback {
+        "recent_fallback"
+    } else if recall.best.match_quality.is_some() {
         "scored"
     } else {
         "query_match"
@@ -91,7 +96,7 @@ fn build_recall_envelope(
         .best
         .match_quality
         .unwrap_or(QUERY_MATCH_EVIDENCE_SCORE);
-    let best_match_score = Some(effective_score);
+    let best_match_score = (!recent_fallback).then_some(effective_score);
     let confidence = RecallMatchConfidence::from_normalized_score(effective_score);
     let quoted_text = args
         .quote
@@ -154,19 +159,35 @@ pub(in crate::cli) fn compute_recall(
     if let Some(query) = query {
         let results = run_search_query(db, query, args.search_mode(), args.limit, filters)?;
         search_mode_used = Some(results.mode_used());
+        let mut recent_ids = results.hits().iter().collect::<Vec<_>>();
+        recent_ids.sort_by(|a, b| {
+            b.last_observed_at()
+                .cmp(a.last_observed_at())
+                .then_with(|| b.snapshot_id().cmp(&a.snapshot_id()))
+        });
+        let recent_ranks = recent_ids
+            .iter()
+            .enumerate()
+            .map(|(rank, hit)| (hit.snapshot_id(), rank))
+            .collect::<HashMap<_, _>>();
         let search_candidates = results
             .hits()
             .iter()
             .enumerate()
             .map(|(index, hit)| {
-                build_search_candidate(
+                let mut candidate = build_search_candidate(
                     hit,
                     query,
                     results.mode_used(),
                     index,
                     args.prefer_app.as_deref(),
-                    args.prefer_recent,
-                )
+                    false,
+                );
+                if args.prefer_recent {
+                    candidate.sort_score +=
+                        recent_index_boost(recent_ranks[&hit.snapshot_id()]) * 0.6;
+                }
+                candidate
             })
             .collect::<Vec<_>>();
 
@@ -176,7 +197,7 @@ pub(in crate::cli) fn compute_recall(
         search_was_weak = search_candidates.iter().all(|candidate| {
             candidate
                 .match_quality
-                .is_none_or(|quality| quality < threshold)
+                .is_some_and(|quality| quality < threshold)
         });
 
         for mut candidate in search_candidates {
@@ -193,15 +214,15 @@ pub(in crate::cli) fn compute_recall(
                 .into_iter()
                 .enumerate()
             {
-                upsert_recall_candidate(
-                    &mut merged,
-                    build_recent_candidate(
-                        hit,
-                        index,
-                        args.prefer_app.as_deref(),
-                        args.prefer_recent,
-                    ),
+                let mut candidate = build_recent_candidate(
+                    hit,
+                    index,
+                    args.prefer_app.as_deref(),
+                    args.prefer_recent,
                 );
+                // Recency orders fallback suggestions; it is not query-match evidence.
+                candidate.match_quality = None;
+                upsert_recall_candidate(&mut merged, candidate);
             }
         }
     } else {
@@ -257,11 +278,12 @@ pub(in crate::cli) fn run_search_query(
     limit: usize,
     filters: &RetrievalFilters,
 ) -> Result<SearchResults> {
-    match mode {
+    let result = match mode {
         SearchMode::Auto => db.search_auto(query, limit, filters),
         SearchMode::Fts => db.search_fts(query, limit, filters),
         SearchMode::Literal => db.search_literal(query, limit, filters),
-    }
+    };
+    result.map_err(super::classify_search_error)
 }
 
 pub(in crate::cli) fn build_search_candidate(

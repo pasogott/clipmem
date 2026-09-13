@@ -42,16 +42,20 @@ final class AppModel {
     var pendingSettingsOpenRequest: SettingsOpenRequest?
     @ObservationIgnored private let hotKeyManager = HotKeyManager()
     @ObservationIgnored private let updateChecker = UpdateChecker()
+    @ObservationIgnored private var lastUpdateAttemptAt: Date?
     @ObservationIgnored private let startupMode: AppStartupMode
-    @ObservationIgnored private let loadRecentPreview: @MainActor () async throws -> [ClipmemItem]
+    @ObservationIgnored private let loadRecentPreview: (@MainActor () async throws -> [ClipmemItem])?
     @ObservationIgnored private var historyOpenRequestID = 0
     @ObservationIgnored private var settingsOpenRequestID = 0
     @ObservationIgnored private var pasteboardMonitor: PasteboardChangeMonitor?
     @ObservationIgnored private var appRefreshNotificationMonitor: AppRefreshNotificationMonitor?
     @ObservationIgnored private var revisionMonitorTask: Task<Void, Never>?
     @ObservationIgnored private var observedRevision: ArchiveRevision?
+    @ObservationIgnored private var statusRefreshInFlight = false
+    @ObservationIgnored private var lastStatusRefreshAt: Date?
     @ObservationIgnored private var revisionRefreshInFlight = false
-    @ObservationIgnored private var configurationGeneration = 0
+    private(set) var configurationGeneration = 0
+    @ObservationIgnored private var activeConfiguration = ClipmemClientConfiguration.current
     @ObservationIgnored private var recentRefreshCoordinator: RecentPreviewRefreshCoordinator?
     @ObservationIgnored private var recentPreviewRefreshedAt: Date?
     @ObservationIgnored private var openQuickRecallAction: (@MainActor () -> Void)?
@@ -59,19 +63,18 @@ final class AppModel {
     @ObservationIgnored private var lastResolvedDatabasePath = UserDefaults.standard.string(forKey: PreferenceKey.databasePathOverride)
     init(startupMode: AppStartupMode = .current, loadRecentPreview: (@MainActor () async throws -> [ClipmemItem])? = nil) {
         self.startupMode = startupMode
-        self.loadRecentPreview = loadRecentPreview ?? {
-            let envelope = try await ClipmemClient(configuration: .current).recent(limit: 40, cursor: nil, filters: .defaultValue)
-            return envelope.results
-        }
+        self.loadRecentPreview = loadRecentPreview
     }
     var healthState: HealthState {
         if client.resolvedBinaryPath() == nil {
             return .missingBinary
         }
-        return serviceStatus?.health ?? .unknown
+        guard var status = serviceStatus else { return .unknown }
+        status.paused = settingsReport?.paused ?? status.paused
+        return status.health
     }
     var client: ClipmemClient {
-        ClipmemClient(configuration: .current)
+        ClipmemClient(configuration: activeConfiguration)
     }
     @discardableResult
     func start() async -> Bool {
@@ -101,43 +104,67 @@ final class AppModel {
         _ = await (statusTask, settingsTask, recentTask)
     }
     func refreshStatus() async {
+        guard !statusRefreshInFlight else { return }
+        statusRefreshInFlight = true
+        lastStatusRefreshAt = Date()
+        let generation = configurationGeneration
+        defer { statusRefreshInFlight = false }
         do {
             let status = try await client.serviceStatus()
+            guard generation == configurationGeneration else { return }
             serviceStatus = status
-            observedRevision = status.revision ?? observedRevision
+            observedRevision = observedRevision ?? status.revision
         } catch {
+            guard generation == configurationGeneration else { return }
             serviceStatus = nil
             lastError = UserError(error)
         }
     }
 
     func refreshDoctor() async {
+        let generation = configurationGeneration
         do {
-            doctorReport = try await client.doctor()
+            let report = try await client.doctor()
+            guard generation == configurationGeneration else { return }
+            doctorReport = report
         } catch {
+            guard generation == configurationGeneration else { return }
             doctorReport = nil
             lastError = UserError(error)
         }
     }
 
     func refreshSettings() async {
+        let generation = configurationGeneration
         do {
-            settingsReport = try await client.settings()
+            let report = try await client.settings()
+            guard generation == configurationGeneration else { return }
+            settingsReport = report
         } catch {
+            guard generation == configurationGeneration else { return }
             settingsReport = nil
+            lastError = UserError(error)
         }
     }
 
     @discardableResult
     func refreshRecentPreview() async -> Bool {
+        let generation = configurationGeneration
         do {
-            let loadedPreview = try await loadRecentPreview()
+            let loadedPreview: [ClipmemItem]
+            if let loadRecentPreview {
+                loadedPreview = try await loadRecentPreview()
+            } else {
+                loadedPreview = try await client.recent(limit: 40, cursor: nil, filters: RetrievalFilterState(hours: defaultRecentHours)).results
+            }
+            guard generation == configurationGeneration else { return false }
             let changed = loadedPreview != recentPreview
             recentPreview = loadedPreview
             recentPreviewRefreshedAt = Date()
             recentPreviewRefreshError = nil
             return changed
         } catch {
+            guard generation == configurationGeneration else { return false }
             recentPreviewRefreshError = UserError(error)
             return false
         }
@@ -163,11 +190,13 @@ final class AppModel {
     }
 
     func compactDatabase() async {
+        let generation = configurationGeneration
         isRunningAction = true
         actionMessage = nil
         defer { isRunningAction = false }
         do {
             let report = try await client.storageCompact(dryRun: false)
+            guard generation == configurationGeneration else { return }
             lastError = nil
             showActionMessage(
                 "Compacted database. Reclaimed \(formatBytes(report.reclaimedBytes)).",
@@ -175,12 +204,14 @@ final class AppModel {
             )
             await refreshStatus()
         } catch {
+            guard generation == configurationGeneration else { return }
             lastError = UserError(error)
             actionMessage = nil
         }
     }
 
     func optimizeImages() async {
+        let generation = configurationGeneration
         isRunningAction = true
         actionMessage = nil
         imageOptimizationProgress = nil
@@ -191,9 +222,11 @@ final class AppModel {
         do {
             let report = try await client.storageOptimizeImagesWithProgress(dryRun: false, limit: nil) { event in
                 await MainActor.run {
+                    guard generation == self.configurationGeneration else { return }
                     self.applyImageOptimizationProgress(event)
                 }
             }
+            guard generation == configurationGeneration else { return }
             lastError = nil
             let saved = DisplayFormatters.byteCount(report.logicalSavedBytes) ?? "\(report.logicalSavedBytes) bytes"
             let reclaimed = formatBytes(report.filesystemSavedBytes)
@@ -220,6 +253,7 @@ final class AppModel {
             }
             await refreshStatus()
         } catch {
+            guard generation == configurationGeneration else { return }
             lastError = UserError(error)
             actionMessage = nil
         }
@@ -260,6 +294,7 @@ final class AppModel {
     }
 
     func previewPurge(olderThan: String) async -> PurgeOutput? {
+        let generation = configurationGeneration
         let threshold = olderThan.trimmingCharacters(in: .whitespacesAndNewlines)
         guard threshold.isEmpty == false else {
             lastError = UserError(message: "Enter a purge threshold.", recovery: "Use a duration like 30d, 12h, or 15m.")
@@ -271,15 +306,18 @@ final class AppModel {
         defer { isRunningAction = false }
         do {
             let report = try await client.purge(olderThan: threshold, dryRun: true)
+            guard generation == configurationGeneration else { return nil }
             lastError = nil
             return report
         } catch {
+            guard generation == configurationGeneration else { return nil }
             lastError = UserError(error)
             return nil
         }
     }
 
     func purge(olderThan: String) async -> PurgeOutput? {
+        let generation = configurationGeneration
         let threshold = olderThan.trimmingCharacters(in: .whitespacesAndNewlines)
         guard threshold.isEmpty == false else {
             lastError = UserError(message: "Enter a purge threshold.", recovery: "Use a duration like 30d, 12h, or 15m.")
@@ -291,6 +329,7 @@ final class AppModel {
         defer { isRunningAction = false }
         do {
             let report = try await client.purge(olderThan: threshold, dryRun: false)
+            guard generation == configurationGeneration else { return nil }
             lastError = nil
             showActionMessage(
                 "Purged \(formatCount(report.snapshotCount, singular: "snapshot")) older than \(threshold). Removed \(formatBytes(UInt64(report.totalBytes))).",
@@ -302,6 +341,7 @@ final class AppModel {
             clipboardHistoryRevision += 1
             return report
         } catch {
+            guard generation == configurationGeneration else { return nil }
             lastError = UserError(error)
             actionMessage = nil
             return nil
@@ -319,34 +359,44 @@ final class AppModel {
 
     @discardableResult
     func runAction(_ command: ClipmemCommand, successMessage: String? = nil) async -> Bool {
+        let generation = configurationGeneration
         isRunningAction = true
         actionMessage = nil
         defer { isRunningAction = false }
         do {
             try await client.runAction(command)
+            guard generation == configurationGeneration else { return false }
             lastError = nil
             showActionMessage(successMessage)
             return true
         } catch {
+            guard generation == configurationGeneration else { return false }
             lastError = UserError(error)
             actionMessage = nil
             return false
         }
     }
 
-    func restore(_ item: ClipmemItem) async {
+    @discardableResult
+    func restore(_ item: ClipmemItem) async -> Bool {
         await restore(snapshotID: item.snapshotId, successMessage: "Restored to clipboard")
     }
 
-    func restore(snapshotID: Int, successMessage: String = "Restored to clipboard") async {
+    @discardableResult
+    func restore(snapshotID: Int, successMessage: String = "Restored to clipboard") async -> Bool {
+        let generation = configurationGeneration
         do {
             _ = try await client.restore(snapshotID: snapshotID)
             pasteboardMonitor?.markCurrentChangeHandled()
+            guard generation == configurationGeneration else { return false }
             lastError = nil
             showActionMessage(successMessage)
             await refreshRecentPreview()
+            return true
         } catch {
+            guard generation == configurationGeneration else { return false }
             lastError = UserError(error)
+            return false
         }
     }
 
@@ -367,12 +417,16 @@ final class AppModel {
     }
     @discardableResult
     func forget(snapshotID: Int) async -> Bool {
+        let generation = configurationGeneration
         do {
             _ = try await client.forget(snapshotID: snapshotID)
+            guard generation == configurationGeneration else { return false }
             recentPreview.removeAll { $0.snapshotId == snapshotID }
+            guard generation == configurationGeneration else { return false }
             lastError = nil
             return true
         } catch {
+            guard generation == configurationGeneration else { return false }
             lastError = UserError(error)
             return false
         }
@@ -397,6 +451,10 @@ final class AppModel {
             return
         }
 
+        if !force, let lastUpdateAttemptAt, Date().timeIntervalSince(lastUpdateAttemptAt) < 3600 {
+            return
+        }
+        lastUpdateAttemptAt = Date()
         updateStatus.beginCheck(manual: manual)
         do {
             let result = try await updateChecker.latestStableRelease()
@@ -596,6 +654,7 @@ final class AppModel {
     }
 
     private func pollArchiveRevision() async {
+        await checkForUpdatesIfNeeded()
         guard revisionRefreshInFlight == false else { return }
         revisionRefreshInFlight = true
         defer { revisionRefreshInFlight = false }
@@ -608,6 +667,9 @@ final class AppModel {
             return
         }
 
+        if lastStatusRefreshAt.map({ Date().timeIntervalSince($0) >= 30 }) ?? true {
+            await refreshStatus()
+        }
         let generation = configurationGeneration
         do {
             let next = try await client.serviceRevision()
@@ -622,9 +684,11 @@ final class AppModel {
             }
 
             await refreshForRevisionChange(from: previous, to: next)
+            guard generation == configurationGeneration else { return }
             observedRevision = next
             lastError = nil
         } catch {
+            guard generation == configurationGeneration else { return }
             if case ClipmemClientError.setupNeeded = error {
                 observedRevision = nil
                 return
@@ -675,6 +739,55 @@ final class AppModel {
         return coordinator
     }
 
+    func adoptConfiguration(_ configuration: ClipmemClientConfiguration) {
+        activeConfiguration = configuration
+        configurationGeneration += 1
+        clipboardHistoryRevision += 1
+        recentPreview = []
+        actionMessage = nil
+        imageOptimizationProgress = nil
+        recentPreviewRefreshedAt = nil
+        lastStatusRefreshAt = nil
+        pendingHistoryOpenRequest = nil
+        lastError = nil
+        recentPreviewRefreshError = nil
+        serviceStatus = nil
+        doctorReport = nil
+        settingsReport = nil
+        observedRevision = nil
+        recentRefreshCoordinator = nil
+    }
+
+    func applyPaths(binary: String, database: String) async -> Bool {
+        guard !isRunningAction else {
+            lastError = UserError(message: "Wait for the current action to finish before changing paths.")
+            return false
+        }
+        let environment = ProcessInfo.processInfo.environment
+        if let forcedDatabase = environment["CLIPMEM_DB_PATH"], forcedDatabase != database.trimmingCharacters(in: .whitespacesAndNewlines) {
+            lastError = UserError(message: "The database path is controlled by CLIPMEM_DB_PATH. Relaunch without that override to change it here.")
+            return false
+        }
+        if let forcedBinary = environment["CLIPMEM_BINARY_PATH"], forcedBinary != binary.trimmingCharacters(in: .whitespacesAndNewlines) {
+            lastError = UserError(message: "The binary path is controlled by CLIPMEM_BINARY_PATH. Relaunch without that override to change it here.")
+            return false
+        }
+        var candidate = activeConfiguration
+        candidate.binaryOverride = binary.trimmingCharacters(in: .whitespacesAndNewlines)
+        candidate.databaseOverride = database.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            _ = try await ClipmemClient(configuration: candidate).serviceRevision()
+            UserDefaults.standard.set(candidate.binaryOverride, forKey: PreferenceKey.binaryPathOverride)
+            UserDefaults.standard.set(candidate.databaseOverride, forKey: PreferenceKey.databasePathOverride)
+            await refreshAppPreferences()
+            lastError = nil
+            return true
+        } catch {
+            lastError = UserError(error)
+            return false
+        }
+    }
+
     private func refreshAppPreferences() async {
         let defaults = UserDefaults.standard
         defaults.synchronize()
@@ -703,9 +816,7 @@ final class AppModel {
         updateStatus = UpdateStatus.load()
 
         if previousBinaryPath != nextBinaryPath || previousDatabasePath != nextDatabasePath {
-            configurationGeneration += 1
-            observedRevision = nil
-            recentRefreshCoordinator = nil
+            adoptConfiguration(.current)
             await installSelfIgnoreIfNeeded()
             await refreshAll()
         } else if previousHotkeyEnabled != nextHotkeyEnabled || previousLaunchAtLoginEnabled != launchAtLoginEnabled || previousUpdateStatus != updateStatus {
@@ -737,176 +848,6 @@ final class AppModel {
                 message: "Could not apply launch at login preference.",
                 recovery: error.localizedDescription
             )
-        }
-    }
-}
-
-final class AppRefreshNotificationMonitor: @unchecked Sendable {
-    private static let notificationRawName = "io.openclaw.clipmem.revision.changed"
-    private static let notificationName = CFNotificationName(notificationRawName as CFString)
-
-    private let onRefresh: @MainActor @Sendable () -> Void
-    private var isStarted = false
-
-    init(onRefresh: @escaping @MainActor @Sendable () -> Void) {
-        self.onRefresh = onRefresh
-    }
-
-    deinit {
-        stop()
-    }
-
-    func start() {
-        guard isStarted == false else { return }
-        isStarted = true
-        let center = CFNotificationCenterGetDarwinNotifyCenter()
-        CFNotificationCenterAddObserver(
-            center,
-            Unmanaged.passUnretained(self).toOpaque(),
-            { _, observer, _, _, _ in
-                guard let observer else { return }
-                let monitor = Unmanaged<AppRefreshNotificationMonitor>.fromOpaque(observer).takeUnretainedValue()
-                Task { @MainActor in
-                    monitor.onRefresh()
-                }
-            },
-            AppRefreshNotificationMonitor.notificationName.rawValue,
-            nil,
-            .deliverImmediately
-        )
-    }
-
-    func stop() {
-        guard isStarted else { return }
-        let center = CFNotificationCenterGetDarwinNotifyCenter()
-        CFNotificationCenterRemoveObserver(
-            center,
-            Unmanaged.passUnretained(self).toOpaque(),
-            AppRefreshNotificationMonitor.notificationName,
-            nil
-        )
-        isStarted = false
-    }
-}
-
-@MainActor
-final class PasteboardChangeMonitor {
-    static let defaultPollInterval: Duration = .milliseconds(250)
-
-    private let pollInterval: Duration
-    private let changeCount: @MainActor () -> Int
-    private let onChange: @MainActor () -> Void
-    private var task: Task<Void, Never>?
-    private var lastChangeCount: Int?
-
-    init(
-        pollInterval: Duration = PasteboardChangeMonitor.defaultPollInterval,
-        changeCount: @escaping @MainActor () -> Int = { NSPasteboard.general.changeCount },
-        onChange: @escaping @MainActor () -> Void
-    ) {
-        self.pollInterval = pollInterval
-        self.changeCount = changeCount
-        self.onChange = onChange
-    }
-
-    deinit {
-        task?.cancel()
-    }
-
-    func start() {
-        guard task == nil else { return }
-        lastChangeCount = changeCount()
-        task = Task { [weak self] in
-            while Task.isCancelled == false {
-                guard let self else { return }
-                try? await Task.sleep(for: self.pollInterval)
-                guard Task.isCancelled == false else { return }
-                self.pollOnce()
-            }
-        }
-    }
-
-    func stop() {
-        task?.cancel()
-        task = nil
-    }
-
-    func pollOnce() {
-        let currentChangeCount = changeCount()
-        guard let lastChangeCount else {
-            self.lastChangeCount = currentChangeCount
-            return
-        }
-        guard currentChangeCount != lastChangeCount else { return }
-        self.lastChangeCount = currentChangeCount
-        onChange()
-    }
-
-    func markCurrentChangeHandled() {
-        lastChangeCount = changeCount()
-    }
-}
-
-@MainActor
-final class RecentPreviewRefreshCoordinator {
-    static let defaultDebounce: Duration = .milliseconds(550)
-
-    private let debounce: Duration
-    private let sleep: @MainActor (Duration) async throws -> Void
-    private let refresh: @MainActor () async -> Bool
-    private var pendingTask: Task<Void, Never>?
-    private var isRefreshing = false
-    private var needsFollowUp = false
-
-    init(
-        debounce: Duration = RecentPreviewRefreshCoordinator.defaultDebounce,
-        sleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
-        refresh: @escaping @MainActor () async -> Bool
-    ) {
-        self.debounce = debounce
-        self.sleep = sleep
-        self.refresh = refresh
-    }
-
-    deinit {
-        pendingTask?.cancel()
-    }
-
-    func schedule() {
-        pendingTask?.cancel()
-        pendingTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await sleep(debounce)
-            } catch {
-                return
-            }
-            guard Task.isCancelled == false else { return }
-            await runRefresh(queueFollowUpIfBusy: true)
-        }
-    }
-
-    func refreshNow() async {
-        pendingTask?.cancel()
-        pendingTask = nil
-        await runRefresh(queueFollowUpIfBusy: false)
-    }
-
-    private func runRefresh(queueFollowUpIfBusy: Bool) async {
-        if isRefreshing {
-            if queueFollowUpIfBusy {
-                needsFollowUp = true
-            }
-            return
-        }
-
-        isRefreshing = true
-        _ = await refresh()
-        isRefreshing = false
-
-        if needsFollowUp {
-            needsFollowUp = false
-            schedule()
         }
     }
 }

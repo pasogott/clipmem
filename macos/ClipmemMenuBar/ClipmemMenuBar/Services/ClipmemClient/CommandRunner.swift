@@ -31,11 +31,19 @@ struct CommandRunner: Sendable {
         self.processStarted = processStarted
     }
 
+    static func defaultTimeout(arguments: [String]) -> Duration {
+        let command = arguments.dropFirst(arguments.first == "--db" ? 2 : 0)
+        let maintenance = ["setup", "storage", "ocr", "purge"].contains(command.first ?? "")
+            || (command.first == "settings" && command.dropFirst().first == "retention")
+        return .seconds(maintenance ? 1800 : 60)
+    }
+
     func run(executable: String, arguments: [String]) async throws -> CommandResult {
         try await run(executable: executable, arguments: arguments, timeout: nil)
     }
 
     func run(executable: String, arguments: [String], timeout: Duration?) async throws -> CommandResult {
+        let timeout: Duration? = timeout ?? Self.defaultTimeout(arguments: arguments)
         let runningProcess = RunningProcess()
         let cancellationState = CancellationState()
         let timeoutError = timeout.map {
@@ -57,7 +65,7 @@ struct CommandRunner: Sendable {
                 process.arguments = arguments
                 process.standardOutput = stdout
                 process.standardError = stderr
-                runningProcess.set(process)
+                runningProcess.set(process, readers: [stdoutReader, stderrReader])
                 defer { runningProcess.clear() }
 
                 stdoutReader.start()
@@ -67,25 +75,28 @@ struct CommandRunner: Sendable {
                 } catch {
                     stdout.fileHandleForWriting.closeFile()
                     stderr.fileHandleForWriting.closeFile()
-                    _ = stdoutReader.wait()
-                    _ = stderrReader.wait()
+                    _ = try? stdoutReader.wait()
+                    _ = try? stderrReader.wait()
                     throw error
                 }
 
                 do {
                     try process.run()
+                    try cancellationState.checkCancellation()
                 } catch {
+                    runningProcess.terminateAndEscalate()
+                    if process.isRunning { process.waitUntilExit() }
                     stdout.fileHandleForWriting.closeFile()
                     stderr.fileHandleForWriting.closeFile()
-                    _ = stdoutReader.wait()
-                    _ = stderrReader.wait()
+                    _ = try? stdoutReader.wait()
+                    _ = try? stderrReader.wait()
                     throw error
                 }
 
                 processStarted?()
                 process.waitUntilExit()
-                let stdoutData = stdoutReader.wait()
-                let stderrData = stderrReader.wait()
+                let stdoutData = try stdoutReader.wait()
+                let stderrData = try stderrReader.wait()
                 try cancellationState.checkCancellation()
                 return CommandResult(exitCode: process.terminationStatus, stdout: stdoutData, stderr: stderrData)
             }
@@ -110,11 +121,19 @@ struct CommandRunner: Sendable {
     func runStreaming(
         executable: String,
         arguments: [String],
+        timeout: Duration = .seconds(1800),
         onStdoutLine: @escaping @Sendable (String) async throws -> Void
     ) async throws -> CommandResult {
         let runningProcess = RunningProcess()
         let cancellationState = CancellationState()
-        let pipeHandles = PipeHandles()
+        let timeoutTask = Task {
+            try? await Task.sleep(for: timeout)
+            if !Task.isCancelled {
+                cancellationState.timeout(CommandTimeoutError(commandCategory: URL(fileURLWithPath: executable).lastPathComponent, deadline: String(describing: timeout)))
+                runningProcess.terminateAndEscalate()
+            }
+        }
+        defer { timeoutTask.cancel() }
         let processStarted = processStarted
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .userInitiated) {
@@ -127,15 +146,9 @@ struct CommandRunner: Sendable {
                 process.arguments = arguments
                 process.standardOutput = stdout
                 process.standardError = stderr
-                runningProcess.set(process)
-                pipeHandles.set([
-                    stdout.fileHandleForReading,
-                    stdout.fileHandleForWriting,
-                    stderr.fileHandleForReading,
-                    stderr.fileHandleForWriting,
-                ])
+                runningProcess.set(process, readers: [stderrReader])
                 defer { runningProcess.clear() }
-                defer { pipeHandles.clear() }
+                defer { try? stdout.fileHandleForReading.close() }
 
                 stderrReader.start()
                 do {
@@ -148,14 +161,12 @@ struct CommandRunner: Sendable {
                         onStdoutLine: onStdoutLine
                     )
                     process.waitUntilExit()
-                    let stderrData = stderrReader.wait()
+                    let stderrData = try stderrReader.wait()
                     try cancellationState.checkCancellation()
                     return CommandResult(exitCode: process.terminationStatus, stdout: stdoutData, stderr: stderrData)
                 } catch {
                     runningProcess.terminateAndEscalate()
-                    stdout.fileHandleForReading.closeFile()
                     stdout.fileHandleForWriting.closeFile()
-                    stderr.fileHandleForReading.closeFile()
                     stderr.fileHandleForWriting.closeFile()
                     stderrReader.close()
                     if process.isRunning {
@@ -167,7 +178,6 @@ struct CommandRunner: Sendable {
         } onCancel: {
             cancellationState.cancel()
             runningProcess.terminateAndEscalate()
-            pipeHandles.close()
         }
     }
 
@@ -178,13 +188,29 @@ struct CommandRunner: Sendable {
     ) async throws -> Data {
         var output = Data()
         var pending = Data()
+        let descriptor = fileHandle.fileDescriptor
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        var buffer = [UInt8](repeating: 0, count: 65536)
 
         while true {
             try cancellationState.checkCancellation()
-            let chunk = fileHandle.availableData
-            if chunk.isEmpty {
-                break
+            var state = pollfd(fd: descriptor, events: Int16(POLLIN | POLLHUP), revents: 0)
+            let ready = poll(&state, 1, 100)
+            if ready == 0 { continue }
+            if ready < 0 {
+                if errno == EINTR { continue }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             }
+            let count = read(descriptor, &buffer, buffer.count)
+            if count == 0 { break }
+            if count < 0 {
+                if errno == EAGAIN || errno == EINTR { continue }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            let chunk = Data(buffer.prefix(count))
             output.append(chunk)
             pending.append(chunk)
 
@@ -215,17 +241,21 @@ struct CommandRunner: Sendable {
 private final class RunningProcess: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?
+    private var readers: [PipeReader] = []
 
-    func set(_ process: Process) {
+    func set(_ process: Process, readers: [PipeReader] = []) {
         lock.lock()
         self.process = process
+        self.readers = readers
         lock.unlock()
     }
 
     func terminateAndEscalate() {
         lock.lock()
         let process = process
+        let readers = readers
         lock.unlock()
+        for reader in readers { reader.close() }
         guard let process, process.isRunning else { return }
         process.terminate()
         let pid = process.processIdentifier
@@ -239,6 +269,7 @@ private final class RunningProcess: @unchecked Sendable {
     func clear() {
         lock.lock()
         process = nil
+        readers = []
         lock.unlock()
     }
 }
@@ -267,39 +298,13 @@ private final class CancellationState: @unchecked Sendable {
     }
 }
 
-private final class PipeHandles: @unchecked Sendable {
-    private let lock = NSLock()
-    private var fileHandles: [FileHandle] = []
-
-    func set(_ fileHandles: [FileHandle]) {
-        lock.lock()
-        self.fileHandles = fileHandles
-        lock.unlock()
-    }
-
-    func close() {
-        lock.lock()
-        let fileHandles = fileHandles
-        self.fileHandles = []
-        lock.unlock()
-        for fileHandle in fileHandles {
-            fileHandle.closeFile()
-        }
-    }
-
-    func clear() {
-        lock.lock()
-        fileHandles = []
-        lock.unlock()
-    }
-}
-
 private final class PipeReader: @unchecked Sendable {
     private let fileHandle: FileHandle
     private let semaphore = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private var data = Data()
     private var isClosed = false
+    private var failure: POSIXError?
 
     init(fileHandle: FileHandle) {
         self.fileHandle = fileHandle
@@ -307,19 +312,55 @@ private final class PipeReader: @unchecked Sendable {
 
     func start() {
         DispatchQueue.global(qos: .userInitiated).async {
-            let output = self.fileHandle.readDataToEndOfFile()
-            self.lock.lock()
-            self.data = output
-            self.lock.unlock()
-            self.semaphore.signal()
+            defer {
+                try? self.fileHandle.close()
+                self.semaphore.signal()
+            }
+            let descriptor = self.fileHandle.fileDescriptor
+            let flags = fcntl(descriptor, F_GETFL)
+            guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) >= 0 else { self.recordFailure(); return }
+            var buffer = [UInt8](repeating: 0, count: 65536)
+            while true {
+                self.lock.lock()
+                let closed = self.isClosed
+                self.lock.unlock()
+                if closed { return }
+                var descriptorState = pollfd(fd: descriptor, events: Int16(POLLIN | POLLHUP), revents: 0)
+                let ready = poll(&descriptorState, 1, 100)
+                if ready == 0 { continue }
+                if ready < 0 {
+                    if errno == EINTR { continue }
+                    self.recordFailure()
+                    return
+                }
+                let count = read(descriptor, &buffer, buffer.count)
+                if count == 0 { return }
+                if count < 0 {
+                    if errno == EAGAIN || errno == EINTR { continue }
+                    self.recordFailure()
+                    return
+                }
+                self.lock.lock()
+                self.data.append(contentsOf: buffer.prefix(count))
+                self.lock.unlock()
+            }
         }
     }
 
-    func wait() -> Data {
+    private func recordFailure() {
+        let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        lock.lock()
+        failure = error
+        lock.unlock()
+    }
+
+    func wait() throws -> Data {
         semaphore.wait()
         lock.lock()
         let output = data
+        let failure = failure
         lock.unlock()
+        if let failure { throw failure }
         return output
     }
 
@@ -331,6 +372,5 @@ private final class PipeReader: @unchecked Sendable {
         }
         isClosed = true
         lock.unlock()
-        try? fileHandle.close()
     }
 }

@@ -44,6 +44,29 @@ pub(in crate::cli) struct TimelineCursorToken {
     pub(in crate::cli) event_id: i64,
 }
 
+pub(in crate::cli) fn bind_search_cursor(encoded: &str, archive_state: &str) -> Result<String> {
+    let mut token: serde_json::Value = decode_cursor(encoded)?;
+    token["archive_state"] = archive_state.into();
+    encode_cursor(&token)
+}
+
+pub(in crate::cli) fn validate_search_archive_state(
+    encoded: &str,
+    archive_state: &str,
+) -> Result<()> {
+    let token: serde_json::Value = decode_cursor(encoded)?;
+    if token
+        .get("archive_state")
+        .and_then(serde_json::Value::as_str)
+        != Some(archive_state)
+    {
+        return Err(invalid_args_error(
+            "search cursor is stale or belongs to another archive; rerun without --cursor",
+        ));
+    }
+    Ok(())
+}
+
 pub(in crate::cli) fn parse_search_cursor(
     encoded: &str,
     query: &str,

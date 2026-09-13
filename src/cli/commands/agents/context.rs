@@ -170,7 +170,7 @@ pub(in crate::cli) fn agent_context(db_path: &Path, format: OutputFormat) -> Res
     match format {
         OutputFormat::Json => print_json(&context),
         OutputFormat::Text | OutputFormat::Human | OutputFormat::Md => {
-            print!("{}", render_agent_context_text(&context));
+            display!("{}", render_agent_context_text(&context));
             Ok(())
         }
         OutputFormat::Jsonl | OutputFormat::Toon => {

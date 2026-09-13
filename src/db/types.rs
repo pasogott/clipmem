@@ -216,6 +216,7 @@ pub(crate) enum CaptureSkipReason {
     Paused,
     IgnoredApp,
     ApiKeyFilter,
+    PrivateClipboardMarker,
     RestoredSnapshot,
     TransientPlatformChange,
 }
@@ -247,6 +248,7 @@ pub(crate) enum CaptureOutcome {
         bundle_id: String,
     },
     SkippedSensitive,
+    SkippedPrivateMarker,
     #[allow(dead_code)]
     TransientPlatformChange,
 }

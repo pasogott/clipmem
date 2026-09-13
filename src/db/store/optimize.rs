@@ -7,7 +7,8 @@ use rusqlite::{params, TransactionBehavior};
 
 use super::config::{
     ImageOptimizationCandidate, IMAGE_OPTIMIZATION_FORMAT, IMAGE_OPTIMIZATION_MAX_DIMENSION,
-    IMAGE_PREVIEW_ENCODER_VERSION, IMAGE_PREVIEW_LONG_EDGE, IMAGE_PREVIEW_OPTIONS_HASH, WEBP_UTI,
+    IMAGE_PREVIEW_ENCODER_VERSION, IMAGE_PREVIEW_LONG_EDGE, IMAGE_PREVIEW_MAX_SOURCE_BYTES,
+    IMAGE_PREVIEW_OPTIONS_HASH, WEBP_UTI,
 };
 use super::jobs::{
     complete_job_tx, enqueue_image_optimization_jobs, load_claimed_image_candidate, JobLease,
@@ -28,7 +29,7 @@ pub(in crate::db) struct OptimizedImage {
     pub(in crate::db) height: u32,
 }
 
-const IMAGE_OPTIMIZATION_BATCH_LIMIT: usize = 250;
+const IMAGE_OPTIMIZATION_BATCH_LIMIT: usize = 1;
 
 impl Database {
     pub(crate) fn image_preview_status(&self) -> Result<ImagePreviewStatus> {
@@ -368,7 +369,8 @@ pub(in crate::db) fn load_image_optimization_candidate_batch(
     let mut stmt = conn
         .prepare(
             r"
-                SELECT snapshot_id, item_index, uti, byte_len, raw_sha256, blob_value
+                WITH candidates AS MATERIALIZED (
+                SELECT snapshot_id, item_index, uti
                 FROM item_representations ir
                 WHERE kind = 'image' AND length(blob_value) > 0
                   AND NOT EXISTS (
@@ -382,6 +384,11 @@ pub(in crate::db) fn load_image_optimization_candidate_batch(
                 ORDER BY byte_len DESC, snapshot_id ASC, item_index ASC, uti ASC
                 LIMIT ?1
                 OFFSET ?2
+                )
+                SELECT ir.snapshot_id, ir.item_index, ir.uti, ir.byte_len, ir.raw_sha256,
+                       CASE WHEN length(ir.blob_value) <= ?5 THEN ir.blob_value ELSE X'' END
+                FROM candidates c JOIN item_representations ir
+                  ON ir.snapshot_id = c.snapshot_id AND ir.item_index = c.item_index AND ir.uti = c.uti
             ",
         )
         .context("prepare image optimization candidate query")?;
@@ -391,7 +398,8 @@ pub(in crate::db) fn load_image_optimization_candidate_batch(
                 limit,
                 offset,
                 IMAGE_PREVIEW_ENCODER_VERSION,
-                IMAGE_PREVIEW_OPTIONS_HASH
+                IMAGE_PREVIEW_OPTIONS_HASH,
+                IMAGE_PREVIEW_MAX_SOURCE_BYTES as i64
             ],
             |row| {
                 Ok(ImageOptimizationCandidate {
@@ -458,9 +466,8 @@ pub(in crate::db) fn database_path_is_file_backed(path: &Path) -> bool {
 }
 
 pub(in crate::db) fn storage_compaction_would_help(db: &Database) -> Result<bool> {
-    let file_sizes = storage_file_sizes(&db.path)?;
     let freelist_count = pragma_usize(&db.conn, "freelist_count")?;
-    Ok(freelist_count > 0 || file_sizes.wal > 0 || file_sizes.shm > 0)
+    Ok(freelist_count > 0)
 }
 
 pub(in crate::db) fn format_compaction_error(error: &anyhow::Error) -> String {
@@ -476,6 +483,9 @@ pub(in crate::db) fn format_compaction_error(error: &anyhow::Error) -> String {
 pub(in crate::db) fn encode_candidate_as_lossless_webp(
     candidate: &ImageOptimizationCandidate,
 ) -> std::result::Result<OptimizedImage, &'static str> {
+    if candidate.byte_len > IMAGE_PREVIEW_MAX_SOURCE_BYTES {
+        return Err("source_exceeds_memory_limit");
+    }
     if candidate_looks_animated_or_unsupported(candidate) {
         return Err("animated_or_unsupported");
     }
@@ -484,6 +494,7 @@ pub(in crate::db) fn encode_candidate_as_lossless_webp(
         .with_guessed_format()
         .map_err(|_| "unsupported")?;
     let mut limits = Limits::default();
+    limits.max_alloc = Some(128 * 1024 * 1024);
     limits.max_image_width = Some(IMAGE_OPTIMIZATION_MAX_DIMENSION);
     limits.max_image_height = Some(IMAGE_OPTIMIZATION_MAX_DIMENSION);
     reader.limits(limits);
@@ -493,6 +504,9 @@ pub(in crate::db) fn encode_candidate_as_lossless_webp(
     let orientation = decoder
         .orientation()
         .map_err(|_| "corrupt_or_unsupported")?;
+    if decoder.total_bytes() > 128 * 1024 * 1024 {
+        return Err("decoded_image_exceeds_memory_limit");
+    }
     let mut image = DynamicImage::from_decoder(decoder).map_err(|_| "corrupt_or_unsupported")?;
     image.apply_orientation(orientation);
     let image =

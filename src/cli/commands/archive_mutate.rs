@@ -64,8 +64,8 @@ pub(in crate::cli) fn export_snapshot_bytes(db_path: &Path, args: &ExportArgs) -
     };
     match format {
         OutputFormat::Json => emit_json_or_text(true, &output, render_export_text)?,
-        OutputFormat::Human => print!("{}", render_export_human(&output)),
-        OutputFormat::Text => print!("{}", render_export_text(&output)),
+        OutputFormat::Human => display!("{}", render_export_human(&output)),
+        OutputFormat::Text => display!("{}", render_export_text(&output)),
         _ => unreachable!("unsupported export format should be rejected earlier"),
     }
 
@@ -186,8 +186,8 @@ pub(in crate::cli) fn restore_snapshot(db_path: &Path, args: &RestoreArgs) -> Re
     };
     match format {
         OutputFormat::Json => emit_json_or_text(true, &output, render_restore_text)?,
-        OutputFormat::Human => print!("{}", render_restore_human(&output)),
-        OutputFormat::Text => print!("{}", render_restore_text(&output)),
+        OutputFormat::Human => display!("{}", render_restore_human(&output)),
+        OutputFormat::Text => display!("{}", render_restore_text(&output)),
         _ => unreachable!("unsupported restore format should be rejected earlier"),
     }
     notify_app_refresh();
@@ -204,8 +204,8 @@ pub(in crate::cli) fn forget_snapshot(db_path: &Path, args: &ForgetArgs) -> Resu
     .ok_or_else(|| not_found_error(format!("snapshot {} was not found", args.snapshot_id)))?;
     match format {
         OutputFormat::Json => emit_json_or_text(true, &report, render_forget_text)?,
-        OutputFormat::Human => print!("{}", render_forget_human(&report)),
-        OutputFormat::Text => print!("{}", render_forget_text(&report)),
+        OutputFormat::Human => display!("{}", render_forget_human(&report)),
+        OutputFormat::Text => display!("{}", render_forget_text(&report)),
         _ => unreachable!("unsupported forget format should be rejected earlier"),
     }
     notify_app_refresh();
@@ -222,8 +222,8 @@ pub(in crate::cli) fn purge_snapshots(db_path: &Path, args: &PurgeArgs) -> Resul
     )?;
     match format {
         OutputFormat::Json => emit_json_or_text(true, &report, render_purge_text)?,
-        OutputFormat::Human => print!("{}", render_purge_human(&report)),
-        OutputFormat::Text => print!("{}", render_purge_text(&report)),
+        OutputFormat::Human => display!("{}", render_purge_human(&report)),
+        OutputFormat::Text => display!("{}", render_purge_text(&report)),
         _ => unreachable!("unsupported purge format should be rejected earlier"),
     }
     if !args.dry_run && report.snapshot_count() > 0 {
@@ -284,11 +284,14 @@ fn atomic_write_export(path: &Path, force: bool, bytes: &[u8]) -> Result<()> {
                 ".{file_name}.clipmem-{}-{sequence}.tmp",
                 std::process::id()
             ));
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&candidate)
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
             {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            match options.open(&candidate) {
                 Ok(file) => Some(Ok((candidate, file))),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
                 Err(error) => Some(Err(error)),

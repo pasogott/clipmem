@@ -7,12 +7,19 @@ on:
   pull_request:
 
 jobs:
+  latest-stable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --all-targets --locked
+
   check:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
 
       - name: Reject insecure workflow installers
         shell: bash
@@ -69,7 +76,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.88.0
@@ -91,7 +98,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.88.0
@@ -100,7 +107,7 @@ jobs:
         run: scripts/run_search_benchmark.sh artifacts/search-benchmark/report.json
 
       - name: Upload reviewable benchmark report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: search-benchmark-${{ matrix.os }}
           path: artifacts/search-benchmark/report.json
@@ -110,7 +117,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
 
       - name: Build menu bar app
         run: |

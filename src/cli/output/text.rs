@@ -72,6 +72,12 @@ pub(in crate::cli) fn render_list_text(envelope: &ListEnvelope) -> String {
         }
     }
 
+    if let Some(cursor) = &envelope.next_cursor {
+        let _ = writeln!(
+            out,
+            "More results available. Repeat this command with --cursor {cursor}"
+        );
+    }
     out
 }
 

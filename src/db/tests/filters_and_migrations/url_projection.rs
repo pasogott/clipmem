@@ -23,7 +23,7 @@ fn url_only_html_enters_builder_v3_search_document() -> Result<()> {
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
 
-    assert_eq!(builder_version, 3);
+    assert_eq!(builder_version, 4);
     assert_eq!(url_text, "https://example.com/image.png");
     Ok(())
 }

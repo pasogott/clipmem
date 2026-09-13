@@ -6,21 +6,21 @@ PROJECT_PATH="$ROOT_DIR/macos/ClipmemMenuBar/ClipmemMenuBar.xcodeproj"
 DERIVED_DATA="$ROOT_DIR/macos/ClipmemMenuBar/DerivedData"
 CLIPMEM_BIN="$ROOT_DIR/target/debug/clipmem"
 APP_NAME="ClipmemMenuBar"
-DEFAULT_DB_PATH="$HOME/Library/Application Support/clipmem/clipmem.sqlite3"
+DEFAULT_DB_PATH="$DERIVED_DATA/clipmem-dev.sqlite3"
 DB_PATH="$DEFAULT_DB_PATH"
 START_WATCHER=1
 WATCHER_PID_FILE="$DERIVED_DATA/clipmem-watch.pid"
 WATCHER_STDOUT="$DERIVED_DATA/clipmem-watch.stdout.log"
 WATCHER_STDERR="$DERIVED_DATA/clipmem-watch.stderr.log"
 WATCHER_PLIST="$DERIVED_DATA/io.openclaw.clipmem.watch.dev.plist"
-WATCHER_LABEL="io.openclaw.clipmem.watch"
+WATCHER_LABEL="io.openclaw.clipmem.watch.dev"
 
 usage() {
   cat <<'USAGE'
 Usage: scripts/build_and_run_menubar.sh [--app-only] [--db PATH]
 
-Builds the debug CLI and menu bar app. By default it also stops installed
-watchers for the active database and starts a dev watcher from target/debug.
+Builds the debug CLI and menu bar app with a separate development archive
+and watcher. Installed production watchers are left running.
 
 Options:
   --app-only   Launch only the app and leave watcher state untouched.
@@ -119,19 +119,6 @@ stop_dev_watcher() {
   fi
 }
 
-stop_installed_watchers() {
-  local uid
-
-  uid="$(id -u)"
-  echo "Stopping installed clipmem watchers for dev run..."
-  launchctl bootout "gui/$uid/$WATCHER_LABEL" >/dev/null 2>&1 || true
-  launchctl disable "gui/$uid/$WATCHER_LABEL" >/dev/null 2>&1 || true
-  launchctl bootout "gui/$uid/homebrew.mxcl.clipmem" >/dev/null 2>&1 || true
-  if command -v brew >/dev/null 2>&1; then
-    brew services stop clipmem >/dev/null 2>&1 || true
-  fi
-}
-
 xml_escape() {
   local value="$1"
   value="${value//&/&amp;}"
@@ -201,7 +188,6 @@ python3 "$ROOT_DIR/scripts/check_version_sync.py"
 
 if [[ "$START_WATCHER" == "1" ]]; then
   stop_dev_watcher
-  stop_installed_watchers
   start_dev_watcher
 else
   echo "App-only mode: watcher state was left untouched."
@@ -224,12 +210,8 @@ if [[ ! -d "$APP_PATH" ]]; then
 fi
 
 echo "Launching $APP_PATH"
-launchctl setenv CLIPMEM_BINARY_PATH "$CLIPMEM_BIN"
-launchctl setenv CLIPMEM_DB_PATH "$DB_PATH"
-open -n "$APP_PATH"
+open -n --env "CLIPMEM_BINARY_PATH=$CLIPMEM_BIN" --env "CLIPMEM_DB_PATH=$DB_PATH" "$APP_PATH"
 sleep 2
-launchctl unsetenv CLIPMEM_BINARY_PATH
-launchctl unsetenv CLIPMEM_DB_PATH
 
 if ! running_app_paths | grep -Fxq "$APP_PATH"; then
   echo "Failed to verify $APP_PATH is running." >&2

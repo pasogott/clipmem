@@ -1,22 +1,17 @@
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 
 use crate::cli::schema::{HermesInstallSkillArgs, HermesUninstallSkillArgs};
 
 use super::package::{packaged_hermes_files, resolve_hermes_skill_dir};
-use super::support::install_packaged_skill;
+use super::support::{install_packaged_skill, uninstall_packaged_skill, validate_installed_skill};
 
 pub(in crate::cli) fn hermes_install_skill(args: &HermesInstallSkillArgs) -> Result<()> {
     let target_dir = resolve_hermes_skill_dir(args.dest.as_deref())?;
     if target_dir.exists() {
         if args.force {
-            std::fs::remove_dir_all(&target_dir).with_context(|| {
-                format!(
-                    "failed to remove existing skill at {}",
-                    target_dir.display()
-                )
-            })?;
+            validate_installed_skill(&target_dir, packaged_hermes_files())?;
         } else {
             return Err(anyhow!(
                 "skill directory already exists at {} (pass --force to replace it)",
@@ -27,22 +22,21 @@ pub(in crate::cli) fn hermes_install_skill(args: &HermesInstallSkillArgs) -> Res
 
     install_hermes_package(&target_dir)?;
 
-    println!("Installed Hermes Agent skill into {}", target_dir.display());
-    println!("Skill file: {}", target_dir.join("SKILL.md").display());
-    println!("Restart Hermes or open a fresh session if the skill does not appear immediately.");
+    displayln!("Installed Hermes Agent skill into {}", target_dir.display());
+    displayln!("Skill file: {}", target_dir.join("SKILL.md").display());
+    displayln!("Restart Hermes or open a fresh session if the skill does not appear immediately.");
     Ok(())
 }
 
 pub(in crate::cli) fn hermes_uninstall_skill(args: &HermesUninstallSkillArgs) -> Result<()> {
     let target_dir = resolve_hermes_skill_dir(args.dest.as_deref())?;
     if !target_dir.exists() {
-        println!("No installed skill found at {}", target_dir.display());
+        displayln!("No installed skill found at {}", target_dir.display());
         return Ok(());
     }
 
-    std::fs::remove_dir_all(&target_dir)
-        .with_context(|| format!("failed to remove {}", target_dir.display()))?;
-    println!("Removed Hermes Agent skill from {}", target_dir.display());
+    uninstall_packaged_skill(&target_dir, packaged_hermes_files())?;
+    displayln!("Removed Hermes Agent skill from {}", target_dir.display());
     Ok(())
 }
 

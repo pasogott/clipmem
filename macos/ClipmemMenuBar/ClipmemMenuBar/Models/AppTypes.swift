@@ -356,6 +356,6 @@ struct RetrievalFilterState: Equatable, Sendable {
     }
 
     static var defaultValue: RetrievalFilterState {
-        RetrievalFilterState(hours: UserDefaults.standard.clipmemDefaultHours)
+        RetrievalFilterState(hours: 0)
     }
 }

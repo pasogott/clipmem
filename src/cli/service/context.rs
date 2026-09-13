@@ -22,6 +22,7 @@ pub(super) fn ensure_supported() -> Result<()> {
 }
 
 pub(super) fn build_context(db_path: &Path) -> Result<ServiceContext> {
+    let db_path = std::path::absolute(db_path)?;
     let home = home_dir()?;
     let binary_path = trusted_binary_path()?;
     let direct_plist_path = home
@@ -107,5 +108,5 @@ fn brew_services_can_manage_clipmem(brew: &Path) -> bool {
 }
 
 pub(super) fn conflict_message() -> String {
-    "Both the Homebrew service and the direct LaunchAgent are installed. Remove one first with `brew services stop clipmem` or `clipmem service uninstall`.".to_string()
+    "Both the Homebrew service and the direct LaunchAgent are installed. Stop both with `clipmem service stop`, or remove both with `clipmem service uninstall` and then run `clipmem setup` to select one provider.".to_string()
 }

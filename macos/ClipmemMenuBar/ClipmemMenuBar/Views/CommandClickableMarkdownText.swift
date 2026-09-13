@@ -126,6 +126,7 @@ private struct LinkCommandClickMonitor: NSViewRepresentable {
 }
 
 private final class LinkCommandClickMonitorView: NSView {
+    override var isFlipped: Bool { true }
     weak var coordinator: LinkCommandClickMonitor.Coordinator?
     private weak var registeredWindow: NSWindow?
     private static var windowMonitors: [ObjectIdentifier: WindowLinkEventMonitor] = [:]

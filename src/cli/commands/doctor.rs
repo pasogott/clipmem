@@ -18,7 +18,7 @@ pub(in crate::cli) fn doctor(db_path: &Path, args: &DoctorArgs) -> Result<()> {
     }
     .context("doctor diagnostics failed")?;
     if args.human {
-        print!("{}", render_doctor_human(&report));
+        display!("{}", render_doctor_human(&report));
     } else {
         emit_json_or_text(args.json, &report, render_doctor_text)?;
     }

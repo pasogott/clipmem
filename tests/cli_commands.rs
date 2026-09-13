@@ -27,3 +27,6 @@ mod search_and_retrieval;
 mod service_setup;
 #[path = "cli_commands/storage_and_openclaw.rs"]
 mod storage_and_openclaw;
+
+#[path = "cli_commands/audit_regressions.rs"]
+mod audit_regressions;

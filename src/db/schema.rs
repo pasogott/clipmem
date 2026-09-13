@@ -10,10 +10,12 @@ use crate::model::{
 use super::sqlite_helpers::{collect_rows, row_enum};
 
 mod integrity;
+pub(in crate::db) use integrity::legacy_prerelease_schema_detected;
+use integrity::secure_fts_indexes;
 mod source_provenance;
 
 pub(super) const SCHEMA: &str = include_str!("schema.sql");
-pub(super) const CURRENT_SCHEMA_VERSION: i64 = 24;
+pub(super) const CURRENT_SCHEMA_VERSION: i64 = 25;
 const LEGACY_PRERELEASE_COLUMNS: &[&str] = &["classification", "is_text"];
 
 pub(in crate::db) fn prepare_schema(conn: &mut Connection) -> Result<()> {
@@ -33,6 +35,8 @@ pub(in crate::db) fn prepare_schema(conn: &mut Connection) -> Result<()> {
         run_schema_migration_steps(&tx, user_version)?;
         tx.execute_batch(SCHEMA)
             .context("reapply schema objects after migration")?;
+        secure_fts_indexes(&tx)?;
+        super::store::ocr::enqueue_ocr_jobs_tx(&tx, None)?;
         tx.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
             .context("set PRAGMA user_version")?;
     }
@@ -143,8 +147,8 @@ const MIGRATION_STEPS: &[MigrationStep] = &[
         run: rebuild_snapshot_file_url_fts,
     },
     MigrationStep {
-        name: "rebuild canonical text projections with builder v3",
-        applies_to: super::store::search_document::needs_builder_v3_migration,
+        name: "rebuild canonical text projections with builder v4",
+        applies_to: super::store::search_document::needs_current_builder_migration,
         run: super::store::search_document::rebuild_all_snapshot_search_documents,
     },
 ];
@@ -762,25 +766,6 @@ pub(in crate::db) fn rebuild_snapshot_file_url_fts(conn: &Connection) -> Result<
     )
     .context("rebuild snapshot file-url FTS")?;
     Ok(())
-}
-
-pub(in crate::db) fn legacy_prerelease_schema_detected(conn: &Connection) -> Result<bool> {
-    let mut stmt = conn
-        .prepare("PRAGMA table_info(item_representations)")
-        .context("prepare PRAGMA table_info(item_representations)")?;
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>(1))
-        .context("read item_representations columns")?;
-    let columns = collect_rows(rows).context("collect item_representations columns")?;
-    if columns.is_empty() {
-        return Ok(false);
-    }
-
-    let has_kind = columns.iter().any(|column| column == "kind");
-    let has_legacy_marker = LEGACY_PRERELEASE_COLUMNS
-        .iter()
-        .any(|legacy| columns.iter().any(|column| column == legacy));
-    Ok(!has_kind || has_legacy_marker)
 }
 
 #[cfg(test)]

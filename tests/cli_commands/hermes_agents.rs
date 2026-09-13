@@ -84,7 +84,7 @@ fn agents_hermes_install_print_and_uninstall_skill_work() -> Result<()> {
 }
 
 #[test]
-fn agents_hermes_install_force_replaces_existing_skill_directory() -> Result<()> {
+fn agents_hermes_install_force_preserves_unmanaged_files() -> Result<()> {
     let test_dir = temp_test_dir("hermes-install-force");
     let bin_dir = test_dir.join("bin");
     let install_dir = test_dir
@@ -94,7 +94,10 @@ fn agents_hermes_install_force_replaces_existing_skill_directory() -> Result<()>
         .join("clipboard-memory");
     fs::create_dir_all(&bin_dir)?;
     fs::create_dir_all(&install_dir)?;
-    fs::write(install_dir.join("SKILL.md"), "stale skill")?;
+    fs::write(
+        install_dir.join("SKILL.md"),
+        "---\nname: clipboard-memory\n---\nstale skill",
+    )?;
     fs::write(install_dir.join("old-file.txt"), "remove me")?;
 
     let path_value = bin_dir.display().to_string();
@@ -104,7 +107,10 @@ fn agents_hermes_install_force_replaces_existing_skill_directory() -> Result<()>
     );
 
     assert!(install.status.success(), "{}", stderr_text(&install));
-    assert!(!install_dir.join("old-file.txt").exists());
+    assert_eq!(
+        fs::read_to_string(install_dir.join("old-file.txt"))?,
+        "remove me"
+    );
     assert!(fs::read_to_string(install_dir.join("SKILL.md"))?.contains("clipboard-memory"));
     assert!(install_dir.join("references/commands.md").is_file());
     assert!(install_dir.join("scripts/check-setup.sh").is_file());
@@ -244,5 +250,52 @@ fn agents_hermes_doctor_fails_when_setup_script_is_not_executable() -> Result<()
     assert!(stdout.contains("scripts/check-setup.sh"));
 
     let _ = fs::remove_dir_all(&test_dir);
+    Ok(())
+}
+
+#[test]
+fn skill_management_rejects_unrelated_destinations_and_preserves_extras() -> Result<()> {
+    for runtime in ["hermes", "openclaw"] {
+        let root = temp_test_dir(&format!("{runtime}-safe-delete"));
+        fs::create_dir_all(&root)?;
+        fs::write(root.join("important.txt"), "keep")?;
+        let destination = root.to_str().unwrap();
+        for action in ["install-skill", "uninstall-skill"] {
+            let mut args = vec!["agents", runtime, action, "--dest", destination];
+            if action == "install-skill" {
+                args.push("--force");
+            }
+            let output = run_cli_with_env(&args, &[]);
+            assert!(!output.status.success());
+            assert_eq!(fs::read_to_string(root.join("important.txt"))?, "keep");
+        }
+        let skill = root.join("clipboard-memory");
+        let output = run_cli_with_env(
+            &[
+                "agents",
+                runtime,
+                "install-skill",
+                "--dest",
+                skill.to_str().unwrap(),
+            ],
+            &[],
+        );
+        assert!(output.status.success(), "{}", stderr_text(&output));
+        fs::write(skill.join("personal.txt"), "keep too")?;
+        let output = run_cli_with_env(
+            &[
+                "agents",
+                runtime,
+                "uninstall-skill",
+                "--dest",
+                skill.to_str().unwrap(),
+            ],
+            &[],
+        );
+        assert!(output.status.success(), "{}", stderr_text(&output));
+        assert!(!skill.join("SKILL.md").exists());
+        assert_eq!(fs::read_to_string(skill.join("personal.txt"))?, "keep too");
+        fs::remove_dir_all(root)?;
+    }
     Ok(())
 }

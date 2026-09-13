@@ -126,7 +126,7 @@ fn toon_output_is_available_for_flattened_list_commands() -> Result<()> {
 
     assert!(recent_output.status.success());
     assert!(recent_stdout.contains(
-        "results[#1\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"
+        "results[1\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"
     ));
     assert!(recent_stdout.contains("git status"));
     assert!(!recent_stdout.contains("sha256"));
@@ -145,7 +145,7 @@ fn toon_output_is_available_for_flattened_list_commands() -> Result<()> {
 
     assert!(search_output.status.success());
     assert!(search_stdout.contains(
-        "results[#1\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"
+        "results[1\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"
     ));
     assert!(!search_stdout.contains("sha256"));
     assert!(!search_stdout.contains("urls"));
@@ -161,7 +161,7 @@ fn toon_output_is_available_for_flattened_list_commands() -> Result<()> {
 
     assert!(timeline_output.status.success());
     assert!(timeline_stdout.contains(
-        "results[#1\t]{event_id\tsnapshot_id\tobserved_at\tchange_count\tkind\tapp_name\tapp_bundle_id\tdisplay_text\titem_count\ttotal_bytes}:"
+        "results[1\t]{event_id\tsnapshot_id\tobserved_at\tchange_count\tkind\tapp_name\tapp_bundle_id\tdisplay_text\titem_count\ttotal_bytes}:"
     ));
     assert!(timeline_stdout.contains("git status"));
     assert!(!timeline_stdout.contains("sha256"));

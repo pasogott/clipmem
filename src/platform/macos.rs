@@ -1,7 +1,9 @@
 use anyhow::Result;
 use objc2::rc::{autoreleasepool, Retained};
 use objc2::runtime::ProtocolObject;
-use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSWorkspace};
+use objc2::sel;
+use objc2_app_kit::{NSPasteboard, NSPasteboardAccessBehavior, NSPasteboardItem, NSWorkspace};
+use objc2_foundation::NSObjectProtocol;
 use objc2_foundation::{NSArray, NSData, NSString};
 use std::cell::Cell;
 
@@ -31,6 +33,11 @@ pub fn capture_snapshot() -> Result<ClipboardSnapshot> {
     stable_capture_with(|| {
         autoreleasepool(|_| {
             let pasteboard = NSPasteboard::generalPasteboard();
+            if pasteboard.respondsToSelector(sel!(accessBehavior))
+                && pasteboard.accessBehavior() == NSPasteboardAccessBehavior::AlwaysDeny
+            {
+                anyhow::bail!("clipboard access is denied; allow clipboard access in System Settings to resume capture");
+            }
             let before_change_count = pasteboard.changeCount() as i64;
             let (frontmost_app_name, frontmost_app_bundle_id) = current_frontmost_app();
 
@@ -38,10 +45,13 @@ pub fn capture_snapshot() -> Result<ClipboardSnapshot> {
             if let Some(pasteboard_items) = pasteboard.pasteboardItems() {
                 for idx in 0..pasteboard_items.len() {
                     let item = pasteboard_items.objectAtIndex(idx);
-                    items.push(read_item(idx, &item));
+                    items.push(read_item(idx, &item)?);
                 }
             }
 
+            if items.is_empty() {
+                anyhow::bail!("clipboard content is not available yet; capture will retry");
+            }
             let origin_app = infer_origin_app_from_items(
                 &items,
                 frontmost_app_name.as_deref(),
@@ -82,23 +92,15 @@ where
         let owned_generation = Cell::new(None);
         let (change_count, rollback_available) = execute_restore_protocol(
             || prepare_pasteboard_items(&plan),
-            || {
-                let current = capture_snapshot()?;
-                Ok(Some(prepare_pasteboard_items(&build_restore_plan(
-                    current.items(),
-                ))?))
-            },
-            || {
-                owned_generation
-                    .get()
-                    .is_some_and(|generation| pasteboard.changeCount() as i64 == generation)
-            },
+            // AppKit has no atomic compare-and-swap for clipboard ownership.
+            // Automatic rollback would need another clearContents and could erase
+            // a user's intervening copy after an ownership check.
+            || Ok(None),
+            || false,
             |pasteboard_items, phase| {
                 // clearContents opens a new generation (restore or rollback)
                 // and returns its actual change count; item writes do not bump
-                // it again. Registration is attempted for every generation;
-                // an interleaved external writer moves to a newer generation
-                // and is never overwritten by this protocol.
+                // it again. Register ownership before writing the destination.
                 let generation = pasteboard.clearContents() as i64;
                 write_registered_generation(
                     pasteboard_items,
@@ -256,7 +258,7 @@ fn is_chromium_browser_bundle_id(bundle_id: &str) -> bool {
     )
 }
 
-fn read_item(item_index: usize, item: &NSPasteboardItem) -> ClipboardItem {
+fn read_item(item_index: usize, item: &NSPasteboardItem) -> Result<ClipboardItem> {
     let types = item.types();
     let mut representations = Vec::new();
 
@@ -264,15 +266,27 @@ fn read_item(item_index: usize, item: &NSPasteboardItem) -> ClipboardItem {
         let uti = types.objectAtIndex(idx);
         let uti_string = uti.to_string();
 
+        if crate::sensitive::is_private_clipboard_type(&uti_string) {
+            return Ok(build_item(
+                item_index,
+                vec![build_representation(uti_string, None, Vec::new())],
+            ));
+        }
         let string_value = item.stringForType(&uti).map(|value| value.to_string());
         let raw_data = item.dataForType(&uti);
+        if raw_data.is_none() && string_value.is_none() {
+            anyhow::bail!("clipboard item {item_index} representation {uti_string} is not available yet; capture will retry");
+        }
         let raw_bytes =
             representation_bytes(raw_data.map(|data| data.to_vec()), string_value.as_deref());
 
         representations.push(build_representation(uti_string, string_value, raw_bytes));
     }
 
-    build_item(item_index, representations)
+    if representations.is_empty() {
+        anyhow::bail!("clipboard item {item_index} has no available representations yet");
+    }
+    Ok(build_item(item_index, representations))
 }
 
 fn build_pasteboard_item(item: &RestorePlanItem) -> Result<objc2::rc::Retained<NSPasteboardItem>> {

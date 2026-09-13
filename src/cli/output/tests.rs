@@ -398,15 +398,15 @@ pub(in crate::cli) fn markdown_and_toon_render_envelopes() {
 
     assert!(markdown.contains("| snapshot_id | kind | observed_at |"));
     assert!(toon.contains(
-            "results[#1\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"
+            "results[1\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"
         ));
     assert!(toon.contains("git status"));
     assert!(!toon.contains("sha256"));
     assert!(!toon.contains("text_fragments"));
-    assert!(toon.contains("apps[#2\t]: Terminal\tSafari"));
+    assert!(toon.contains("apps[2\t]: Terminal\tSafari"));
     assert!(toon.contains("window:"));
     assert!(toon.contains("hours: 24"));
-    assert!(toon.contains("flags[#1]:"));
+    assert!(toon.contains("flags[1]:"));
     assert!(toon.contains("name: prefer_recent"));
 }
 
@@ -539,9 +539,9 @@ pub(in crate::cli) fn recall_markdown_and_toon_render_best_match_and_alternative
     assert!(markdown.contains("## Alternatives"));
     assert!(markdown.contains("> git status"));
     assert!(toon.contains(
-            "best_candidate[#1\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"
+            "best_candidate[1\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"
         ));
-    assert!(toon.contains("alternatives[#1\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"));
+    assert!(toon.contains("alternatives[1\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"));
     assert!(toon.contains("quoted snippet"));
     assert!(toon.contains("git commit"));
     assert!(!toon.contains("\tsnippet}:"));
@@ -584,7 +584,7 @@ pub(in crate::cli) fn timeline_toon_uses_scalar_projection_display_text_fallback
     let toon = render_list_toon(&envelope);
 
     assert!(toon.contains(
-            "results[#1\t]{event_id\tsnapshot_id\tobserved_at\tchange_count\tkind\tapp_name\tapp_bundle_id\tdisplay_text\titem_count\ttotal_bytes}:"
+            "results[1\t]{event_id\tsnapshot_id\tobserved_at\tchange_count\tkind\tapp_name\tapp_bundle_id\tdisplay_text\titem_count\ttotal_bytes}:"
         ));
     assert!(toon.contains("git preview"));
     assert!(!toon.contains("best_text_uti"));
@@ -706,7 +706,7 @@ fn render_list_toon_join_encoded_for_profile(envelope: &ListEnvelope) -> String 
     };
     let _ = writeln!(
         out,
-        "results[#{}\t]{{{}}}:",
+        "results[{}\t]{{{}}}:",
         envelope.results.len(),
         field_names.join("\t")
     );

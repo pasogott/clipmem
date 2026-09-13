@@ -19,7 +19,7 @@ use crate::cli::schema::OpenClawDoctorArgs;
 
 pub(in crate::cli) fn openclaw_doctor(args: &OpenClawDoctorArgs) -> Result<()> {
     let report = build_openclaw_doctor_report(args)?;
-    print!("{}", render_openclaw_doctor_report(&report));
+    display!("{}", render_openclaw_doctor_report(&report));
 
     if report
         .checks
@@ -137,25 +137,25 @@ pub(in crate::cli) fn openclaw_sandbox_check(openclaw_path: Option<&PathBuf>) ->
     };
 
     let output = ProcessCommand::new(openclaw_path)
-        .args(["sandbox", "explain"])
+        .args(["sandbox", "explain", "--json"])
         .output();
 
     match output {
         Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let lower = stdout.to_ascii_lowercase();
-            if lower.contains("disabled") || lower.contains("off") {
+            let state = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
+            let mode = state.as_ref().and_then(|value| value.pointer("/sandbox/mode")).and_then(serde_json::Value::as_str);
+            if mode == Some("off") {
                 AgentDoctorCheck {
                     status: AgentDoctorStatus::Ok,
                     label: "Sandbox visibility".to_string(),
-                    detail: "OpenClaw sandboxing appears disabled; host PATH should be sufficient.".to_string(),
+                    detail: "OpenClaw reports sandbox.mode=off; host PATH should be sufficient.".to_string(),
                     next_steps: Vec::new(),
                 }
             } else {
                 AgentDoctorCheck {
                     status: AgentDoctorStatus::Warn,
                     label: "Sandbox visibility".to_string(),
-                    detail: "OpenClaw sandboxing appears active; `clipmem` may need to be available inside sandbox containers as well as on the host.".to_string(),
+                    detail: "OpenClaw sandboxing is active or its state could not be verified; `clipmem` may need to be available inside sandbox containers as well as on the host.".to_string(),
                     next_steps: vec![
                         "Ensure `clipmem` is installed in a path visible inside the sandbox image, not only your host shell.".to_string(),
                         "If you installed clipmem after sandbox creation, recreate containers with `openclaw sandbox recreate --all`.".to_string(),

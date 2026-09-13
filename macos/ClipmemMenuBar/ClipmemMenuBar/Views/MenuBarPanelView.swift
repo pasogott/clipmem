@@ -3,6 +3,14 @@ import SwiftUI
 
 struct MenuBarPanelView: View {
     let appModel: AppModel
+    private let configurationGeneration: Int
+    @State private var pendingForgetItem: ClipmemItem?
+    @State private var confirmForget = false
+
+    init(appModel: AppModel) {
+        self.appModel = appModel
+        configurationGeneration = appModel.configurationGeneration
+    }
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
@@ -24,6 +32,10 @@ struct MenuBarPanelView: View {
                 .padding([.horizontal, .top])
             }
 
+            if let error = appModel.lastError ?? appModel.recentPreviewRefreshError {
+                ErrorBanner(message: error.message, recovery: error.recovery)
+                    .padding(.horizontal)
+            }
             recentsSearchField
                 .padding([.horizontal, .top])
                 .padding(.bottom, Spacing.sm)
@@ -34,6 +46,19 @@ struct MenuBarPanelView: View {
 
             footer
                 .padding(Spacing.md)
+        }
+        .confirmationDialog("Forget this snapshot?", isPresented: $confirmForget) {
+            Button("Forget", role: .destructive) {
+                if let item = pendingForgetItem {
+                    Task {
+                        guard configurationGeneration == appModel.configurationGeneration else { return }
+                        await appModel.forget(item)
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingForgetItem = nil }
+        } message: {
+            Text("This permanently removes the saved content and all records of when it was copied. This cannot be undone.")
         }
         .overlay(alignment: .top) {
             ActionFeedbackOverlay(message: appModel.actionMessage)
@@ -177,7 +202,11 @@ struct MenuBarPanelView: View {
         Button {
             restoringItemID = item.snapshotId
             Task {
-                await appModel.restore(item)
+                guard configurationGeneration == appModel.configurationGeneration else { return }
+                guard await appModel.restore(item) else {
+                    restoringItemID = nil
+                    return
+                }
                 try? await Task.sleep(for: .milliseconds(200))
                 restoringItemID = nil
                 NSApp.deactivate()
@@ -208,7 +237,8 @@ struct MenuBarPanelView: View {
                 WindowActivation.openWindow(openWindow, id: .history)
             }
             Button("Forget", role: .destructive) {
-                Task { await appModel.forget(item) }
+                pendingForgetItem = item
+                confirmForget = true
             }
         }
     }

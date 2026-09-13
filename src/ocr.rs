@@ -46,13 +46,64 @@ pub(crate) fn run_ocr_jobs(
     snapshot_id: Option<i64>,
     retry_failed: bool,
 ) -> Result<OcrRunReport> {
-    let candidates = db.next_ocr_candidates(limit, snapshot_id, retry_failed)?;
+    run_ocr_batch(db, engine, limit, snapshot_id, retry_failed, true)
+}
+
+pub(crate) fn run_queued_ocr_jobs(
+    db: &mut Database,
+    engine: &dyn OcrEngine,
+    limit: usize,
+) -> Result<OcrRunReport> {
+    run_ocr_batch(db, engine, limit, None, false, false)
+}
+
+pub(crate) fn finish_snapshot_ocr(
+    db: &mut Database,
+    engine: &dyn OcrEngine,
+    snapshot_id: i64,
+    timeout: std::time::Duration,
+) -> Result<()> {
+    let started = std::time::Instant::now();
+    loop {
+        if !db.snapshot_has_outstanding_ocr(snapshot_id)? {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            started.elapsed() < timeout,
+            "snapshot {snapshot_id} was captured, but OCR is still pending; the watcher can continue it, or run `clipmem ocr run --snapshot {snapshot_id}`"
+        );
+        let report = run_ocr_batch(db, engine, 1, Some(snapshot_id), false, false)?;
+        if report.processed() == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+fn run_ocr_batch(
+    db: &mut Database,
+    engine: &dyn OcrEngine,
+    limit: usize,
+    snapshot_id: Option<i64>,
+    retry_failed: bool,
+    discover: bool,
+) -> Result<OcrRunReport> {
+    let mut processed = 0;
     let mut ready = 0;
     let mut failed = 0;
     let mut skipped = 0;
 
-    for candidate in &candidates {
-        match engine.recognize_text(candidate.blob_value()) {
+    for index in 0..limit.clamp(1, 250) {
+        let candidates = if discover {
+            db.next_ocr_candidates(1, snapshot_id, retry_failed && index == 0)?
+        } else {
+            db.claim_pending_ocr_candidates(1, snapshot_id)?
+        };
+        let Some(candidate) = candidates.first() else {
+            break;
+        };
+        processed += 1;
+        match db.with_ocr_lease_renewal(candidate, || engine.recognize_text(candidate.blob_value()))
+        {
             Ok(text) => {
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
@@ -81,7 +132,7 @@ pub(crate) fn run_ocr_jobs(
 
     let remaining_pending = db.ocr_status_report()?.pending();
     Ok(OcrRunReport::new(
-        candidates.len(),
+        processed,
         ready,
         failed,
         skipped,
@@ -135,6 +186,136 @@ mod tests {
                 vec![build_representation("public.png".to_string(), None, bytes)],
             )],
         )
+    }
+
+    #[test]
+    fn queued_ocr_does_not_discover_old_images_and_exhaustion_is_visible() -> anyhow::Result<()> {
+        let mut db = Database::open_in_memory()?;
+        db.store_capture(&image_snapshot(1, vec![1, 2, 3]))?;
+        let captured = db.store_capture(&image_snapshot(2, vec![4, 5, 6]))?;
+        db.enqueue_ocr_for_snapshot(captured.snapshot_id())?;
+        let candidates = db.claim_pending_ocr_candidates(1, None)?;
+        assert_eq!(candidates.len(), 1);
+        db.conn.execute("UPDATE jobs SET attempts = max_attempts, lease_until = datetime('now', '-1 second') WHERE kind = 'ocr'", [])?;
+        assert!(db.claim_pending_ocr_candidates(1, None)?.is_empty());
+        assert_eq!(db.ocr_status_report()?.pending(), 0);
+        assert_eq!(db.ocr_status_report()?.failed(), 1);
+        let report = super::run_queued_ocr_jobs(&mut db, &FakeOcrEngine, 25)?;
+        assert_eq!(report.processed(), 0);
+        assert_eq!(db.ocr_status_report()?.ready(), 0);
+        let retried = run_ocr_jobs(
+            &mut db,
+            &FakeOcrEngine,
+            1,
+            Some(captured.snapshot_id()),
+            true,
+        )?;
+        assert_eq!(retried.ready(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn finish_snapshot_waits_for_another_workers_lease() -> anyhow::Result<()> {
+        let path = std::env::temp_dir().join(format!(
+            "clipmem-ocr-wait-{}-{}.sqlite3",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let mut db = Database::open_or_init_and_migrate(&path)?;
+        let id = db
+            .store_capture(&image_snapshot(1, vec![1, 2, 3]))?
+            .snapshot_id();
+        db.enqueue_ocr_for_snapshot(id)?;
+        let mut worker = Database::open_or_init_and_migrate(&path)?;
+        let candidate = worker.claim_pending_ocr_candidates(1, Some(id))?.remove(0);
+        let completion = std::thread::spawn(move || -> anyhow::Result<()> {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            worker.store_ocr_candidate_text(&candidate, "fake", "fast", "completed by watcher")
+        });
+        super::finish_snapshot_ocr(
+            &mut db,
+            &FakeOcrEngine,
+            id,
+            std::time::Duration::from_secs(5),
+        )?;
+        assert_eq!(db.ocr_status_report()?.ready(), 1);
+        completion.join().unwrap()?;
+        drop(db);
+        std::fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn finish_snapshot_reports_pending_timeout_and_ignores_other_snapshots() -> anyhow::Result<()> {
+        let mut db = Database::open_in_memory()?;
+        let first = db
+            .store_capture(&image_snapshot(1, vec![1, 2, 3]))?
+            .snapshot_id();
+        db.enqueue_ocr_for_snapshot(first)?;
+        let _claimed = db.claim_pending_ocr_candidates(1, Some(first))?;
+        let error =
+            super::finish_snapshot_ocr(&mut db, &FakeOcrEngine, first, std::time::Duration::ZERO)
+                .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("was captured, but OCR is still pending"));
+        let second = db
+            .store_capture(&image_snapshot(2, vec![4, 5, 6]))?
+            .snapshot_id();
+        db.enqueue_ocr_for_snapshot(second)?;
+        super::finish_snapshot_ocr(
+            &mut db,
+            &FakeOcrEngine,
+            second,
+            std::time::Duration::from_secs(1),
+        )?;
+        assert!(db.snapshot_has_outstanding_ocr(first)?);
+        assert!(!db.snapshot_has_outstanding_ocr(second)?);
+        Ok(())
+    }
+
+    #[test]
+    fn finish_snapshot_checks_deadline_before_claiming_another_image() -> anyhow::Result<()> {
+        struct SlowEngine(std::cell::Cell<usize>);
+        impl OcrEngine for SlowEngine {
+            fn engine_name(&self) -> &'static str {
+                "slow"
+            }
+            fn recognition_level(&self) -> &'static str {
+                "fast"
+            }
+            fn recognize_text(&self, _: &[u8]) -> anyhow::Result<String> {
+                self.0.set(self.0.get() + 1);
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                Ok("recognized".into())
+            }
+        }
+        let mut db = Database::open_in_memory()?;
+        let snapshot = build_snapshot(
+            CaptureContext::new(1),
+            vec![
+                build_item(
+                    0,
+                    vec![build_representation("public.png".into(), None, vec![1])],
+                ),
+                build_item(
+                    1,
+                    vec![build_representation("public.png".into(), None, vec![2])],
+                ),
+            ],
+        );
+        let id = db.store_capture(&snapshot)?.snapshot_id();
+        db.enqueue_ocr_for_snapshot(id)?;
+        let engine = SlowEngine(std::cell::Cell::new(0));
+        let error =
+            super::finish_snapshot_ocr(&mut db, &engine, id, std::time::Duration::from_millis(200))
+                .unwrap_err();
+        assert!(error.to_string().contains("OCR is still pending"));
+        assert_eq!(engine.0.get(), 1);
+        assert_eq!(db.ocr_status_report()?.pending(), 1);
+        Ok(())
     }
 
     #[test]

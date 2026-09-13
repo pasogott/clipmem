@@ -83,7 +83,7 @@ fn storage_image_candidates(db_path: &Path, args: &StorageImageCandidatesArgs) -
             emit_json_or_text(true, &candidates, |rows| render_image_candidates_text(rows))
         }
         OutputFormat::Human | OutputFormat::Text => {
-            print!("{}", render_image_candidates_text(&candidates));
+            display!("{}", render_image_candidates_text(&candidates));
             Ok(())
         }
         _ => unreachable!("unsupported storage image-candidates format should be rejected earlier"),

@@ -132,8 +132,9 @@ struct HistoryWindowView: View {
             detail: history.selectedDetail,
             fallback: history.selectedItem,
             appModel: appModel,
+            configurationGeneration: history.configurationGeneration,
             isLoading: history.isLoadingDetail,
-            onForgot: { await history.forgetSelected() }
+            onForgot: { snapshotID in await history.forget(snapshotID: snapshotID) }
         )
             .navigationTitle("History")
             .navigationSplitViewColumnWidth(min: 360, ideal: 580)
@@ -202,7 +203,7 @@ struct HistoryWindowView: View {
 
     private var resultList: some View {
         VStack(spacing: 0) {
-            if let error = history.error {
+            if let error = history.error ?? appModel.lastError {
                 ErrorBanner(
                     message: error.message,
                     recovery: error.recovery,

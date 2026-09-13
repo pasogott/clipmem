@@ -56,7 +56,12 @@ pub(in crate::db) fn snapshot_event_filter_clause(cache_alias: &str) -> String {
     format!(
         "{temporal_parameter_bindings}
          AND (:app_like IS NULL OR ({cache_alias}.app_names_lower != '' AND {cache_alias}.app_names_lower LIKE :app_like ESCAPE '\\'))
-         AND (:bundle_id IS NULL OR instr(char(31) || {cache_alias}.bundle_ids_lower || char(31), char(31) || :bundle_id || char(31)) > 0)"
+         AND (:bundle_id IS NULL OR instr(char(31) || {cache_alias}.bundle_ids_lower || char(31), char(31) || :bundle_id || char(31)) > 0)
+         AND (:app_like IS NULL OR :bundle_id IS NULL OR EXISTS (
+             SELECT 1 FROM capture_events ce WHERE ce.snapshot_id = {cache_alias}.snapshot_id
+             AND lower(ce.frontmost_app_name) LIKE :app_like ESCAPE '\\'
+             AND lower(ce.frontmost_app_bundle_id) = :bundle_id
+         ))"
     )
 }
 
@@ -318,7 +323,9 @@ pub(in crate::db) fn effective_since_param(filters: &RetrievalFilters) -> Result
     let Some(hours) = filters.hours() else {
         return Ok(None);
     };
-    let since = (time::OffsetDateTime::now_utc() - time::Duration::hours(i64::from(hours)))
+    let since = time::OffsetDateTime::now_utc()
+        .checked_sub(time::Duration::hours(i64::from(hours)))
+        .ok_or_else(|| anyhow::anyhow!("hours exceeds the supported calendar range"))?
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|error| anyhow::anyhow!("format filter time: {error}"))?;
     Ok(Some(since))

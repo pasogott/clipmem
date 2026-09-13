@@ -75,9 +75,9 @@ pub fn project_html(input: &str) -> TextProjectionResult {
 
         let Some(end) = find_tag_end(&input[cursor + 1..]) else {
             diagnostics.push(ProjectionDiagnostic::MalformedMarkup);
-            push_decoded_text(&mut out, "<");
-            cursor += 1;
-            continue;
+            // No closing delimiter remains. Consume the malformed tail once.
+            push_decoded_text(&mut out, &input[cursor..]);
+            break;
         };
         tags += 1;
         let raw = &input[cursor + 1..cursor + 1 + end];
@@ -87,8 +87,8 @@ pub fn project_html(input: &str) -> TextProjectionResult {
             continue;
         }
         let hidden = HIDDEN.contains(&tag.name.as_str());
-        if hidden && !tag.closing && !tag.self_closing {
-            let Some(after_close) = find_raw_text_close(input, cursor, &tag.name) else {
+        if hidden && !tag.closing {
+            let Some(after_close) = find_hidden_close(input, cursor, &tag.name) else {
                 diagnostics.push(ProjectionDiagnostic::MalformedMarkup);
                 cursor = input.len();
                 break;
@@ -140,7 +140,6 @@ fn find_raw_text_close(input: &str, start: usize, name: &str) -> Option<usize> {
 struct Tag {
     name: String,
     closing: bool,
-    self_closing: bool,
     urls: Vec<String>,
 }
 
@@ -153,15 +152,9 @@ fn parse_tag(raw: &str) -> Tag {
         .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
         .collect::<String>()
         .to_ascii_lowercase();
-    let self_closing = trimmed.ends_with('/')
-        || matches!(
-            name.as_str(),
-            "br" | "hr" | "img" | "meta" | "link" | "input"
-        );
     Tag {
         name,
         closing,
-        self_closing,
         urls: extract_url_attributes(body),
     }
 }
@@ -288,14 +281,19 @@ fn decode_entities(text: &str) -> String {
         let at = cursor + relative;
         out.push_str(&text[cursor..at]);
         let tail = &text[at + 1..];
-        let Some(end) = tail.find(';').filter(|end| *end <= 32) else {
+        let Some(end) = tail
+            .as_bytes()
+            .iter()
+            .take(33)
+            .position(|byte| *byte == b';')
+        else {
             out.push('&');
             cursor = at + 1;
             continue;
         };
         let entity = &tail[..end];
         if let Some(decoded) = decode_entity(entity) {
-            out.push(decoded);
+            out.push_str(&decoded);
             cursor = at + end + 2;
         } else {
             out.push('&');
@@ -306,28 +304,86 @@ fn decode_entities(text: &str) -> String {
     out
 }
 
-fn decode_entity(entity: &str) -> Option<char> {
-    match entity {
-        "amp" => Some('&'),
-        "lt" => Some('<'),
-        "gt" => Some('>'),
-        "quot" => Some('"'),
-        "apos" | "#39" => Some('\''),
-        "nbsp" => Some(' '),
-        _ if entity.starts_with("#x") || entity.starts_with("#X") => {
-            u32::from_str_radix(&entity[2..], 16)
-                .ok()
-                .and_then(char::from_u32)
-        }
-        _ if entity.starts_with('#') => entity[1..].parse::<u32>().ok().and_then(char::from_u32),
-        _ => None,
+fn decode_entity(entity: &str) -> Option<String> {
+    if let Some(number) = entity.strip_prefix('#') {
+        let value = if let Some(hex) = number
+            .strip_prefix('x')
+            .or_else(|| number.strip_prefix('X'))
+        {
+            u32::from_str_radix(hex, 16).ok()?
+        } else {
+            number.parse::<u32>().ok()?
+        };
+        let ch = if (0x80..=0x9f).contains(&value) {
+            web_atoms::C1_REPLACEMENTS[(value - 0x80) as usize].unwrap_or(char::from_u32(value)?)
+        } else {
+            char::from_u32(value)
+                .filter(|ch| *ch != '\0')
+                .unwrap_or('�')
+        };
+        return Some(ch.to_string());
     }
+    let &(first, second) = web_atoms::NAMED_ENTITIES.get(&format!("{entity};"))?;
+    let mut decoded = char::from_u32(first)?.to_string();
+    if second != 0 {
+        decoded.push(char::from_u32(second)?);
+    }
+    Some(decoded)
+}
+
+fn find_hidden_close(input: &str, start: usize, name: &str) -> Option<usize> {
+    if matches!(name, "script" | "style") {
+        return find_raw_text_close(input, start, name);
+    }
+    let mut depth = 1;
+    let mut cursor = start;
+    while let Some(relative) = input[cursor..].find('<') {
+        cursor += relative;
+        if input[cursor..].starts_with("<!--") {
+            cursor += 4 + input[cursor + 4..].find("-->")? + 3;
+            continue;
+        }
+        let end = find_tag_end(&input[cursor + 1..])?;
+        let tag = parse_tag(&input[cursor + 1..cursor + 1 + end]);
+        cursor += end + 2;
+        if tag.name == name {
+            if tag.closing {
+                depth -= 1;
+            } else {
+                depth += 1;
+            }
+            if depth == 0 {
+                return Some(cursor);
+            }
+        } else if !tag.closing && matches!(tag.name.as_str(), "script" | "style") {
+            cursor = find_raw_text_close(input, cursor, &tag.name)?;
+        }
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::project_html;
     use crate::model::ProjectionDiagnostic;
+
+    #[test]
+    fn nested_hidden_content_and_named_entities() {
+        let p = project_html("<template>outer<template>inner</template>still hidden</template><p>&copy; &eacute; &NotEqualTilde;</p>");
+        assert_eq!(p.text, "© é ≂̸");
+    }
+
+    #[test]
+    fn long_unterminated_markup_and_entities_are_consumed_once() {
+        let tags = "<".repeat(100_000);
+        let projected = project_html(&tags);
+        assert_eq!(projected.text, tags);
+        assert!(projected
+            .diagnostics
+            .contains(&ProjectionDiagnostic::MalformedMarkup));
+        let entities = "&".repeat(100_000);
+        assert_eq!(project_html(&entities).text, entities);
+    }
 
     #[test]
     fn visible_text_boundaries_entities_and_urls() {

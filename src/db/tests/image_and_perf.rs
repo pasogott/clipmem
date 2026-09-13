@@ -379,7 +379,7 @@ fn image_optimization_preserves_literal_search_by_app_identity() -> Result<()> {
 }
 
 #[test]
-fn file_backed_image_optimization_compacts_without_adding_rows() -> Result<()> {
+fn file_backed_image_optimization_does_not_vacuum_without_free_pages() -> Result<()> {
     let path = temp_db_path("image-optimization-compacts");
     let original = lossless_test_tiff()?;
     let snapshot = image_snapshot(1, vec![("public.tiff", original)]);
@@ -408,8 +408,8 @@ fn file_backed_image_optimization_compacts_without_adding_rows() -> Result<()> {
 
     assert_eq!(report.scanned_rows, 1);
     assert_eq!(report.compressed_rows, 1);
-    assert!(report.compact_run);
-    assert!(report.compact.is_some());
+    assert!(!report.compact_run);
+    assert!(report.compact.is_none());
     assert!(!report.compact_recommended);
     assert_eq!(row_count_after, row_count_before);
     assert_eq!(status, "uncompressed");
@@ -421,7 +421,7 @@ fn file_backed_image_optimization_compacts_without_adding_rows() -> Result<()> {
 }
 
 #[test]
-fn no_compact_optimization_leaves_reclaimable_pages_for_later_compaction() -> Result<()> {
+fn repeated_optimization_does_not_vacuum_only_for_wal_sidecars() -> Result<()> {
     let path = temp_db_path("image-optimization-no-compact");
     let original = lossless_test_tiff()?;
     let snapshot = image_snapshot(1, vec![("public.tiff", original)]);
@@ -440,8 +440,8 @@ fn no_compact_optimization_leaves_reclaimable_pages_for_later_compaction() -> Re
     assert_eq!(freelist_after_rewrite, 0);
     assert_eq!(second.scanned_rows, 0);
     assert_eq!(second.compressed_rows, 0);
-    assert!(second.compact_run);
-    assert!(second.compact.is_some());
+    assert!(!second.compact_run);
+    assert!(second.compact.is_none());
     assert!(!second.compact_recommended);
 
     cleanup_db(&path);

@@ -198,7 +198,7 @@ fn one_of_error(label: &str, value: &str, allowed: &str) -> LimitParseError {
 
 pub(super) fn parse_duration_value(value: &str) -> Result<DurationValue, LimitParseError> {
     let trimmed = value.trim();
-    if trimmed.len() < 2 {
+    if trimmed.len() < 2 || !trimmed.is_ascii() {
         return Err(LimitParseError(format!(
             "invalid duration '{value}'; expected <integer><unit> like 30d, 12h, or 15m"
         )));

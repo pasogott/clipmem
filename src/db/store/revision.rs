@@ -5,6 +5,14 @@ use crate::db::sqlite_helpers::row_u64;
 use crate::db::types::{ArchiveChangeKind, ArchiveRevision, Database};
 
 impl Database {
+    pub(crate) fn search_archive_state(&self) -> Result<String> {
+        self.conn.query_row(
+            "SELECT m.archive_uuid || ':' || r.archive_content_revision || ':' || r.ocr_revision || ':' || r.storage_revision
+             FROM archive_metadata m JOIN archive_revisions r ON r.id = m.id WHERE m.id = 1",
+            [], |row| row.get(0),
+        ).context("load search archive identity and revision")
+    }
+
     pub fn archive_revision(&self) -> Result<ArchiveRevision> {
         self.conn
             .query_row(

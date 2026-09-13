@@ -15,6 +15,7 @@ pub(in crate::cli) fn install_packaged_skill(
     target_dir: &Path,
     files: &[PackagedSkillFile],
 ) -> Result<()> {
+    validate_skill_paths(target_dir, files)?;
     std::fs::create_dir_all(target_dir)
         .with_context(|| format!("failed to create {}", target_dir.display()))?;
 
@@ -35,6 +36,97 @@ pub(in crate::cli) fn install_packaged_skill(
     Ok(())
 }
 
+// Never follow a link while replacing or removing a user-selected installation.
+fn validate_skill_paths(target: &Path, files: &[PackagedSkillFile]) -> Result<()> {
+    for path in std::iter::once(target.to_path_buf())
+        .chain(files.iter().map(|file| target.join(file.relative_path)))
+    {
+        for ancestor in path.ancestors().take_while(|path| path.starts_with(target)) {
+            match std::fs::symlink_metadata(ancestor) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(anyhow!(
+                        "refusing skill path containing a symlink: {}",
+                        ancestor.display()
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("failed to inspect {}", ancestor.display()))
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(in crate::cli) fn validate_installed_skill(
+    target: &Path,
+    files: &[PackagedSkillFile],
+) -> Result<()> {
+    validate_skill_paths(target, files)?;
+    let content = std::fs::read_to_string(target.join("SKILL.md")).with_context(|| {
+        format!(
+            "refusing to modify unrecognized skill directory {}",
+            target.display()
+        )
+    })?;
+    let frontmatter = parse_skill_frontmatter(&content)?;
+    if frontmatter_value(&frontmatter, "name") != Some("clipboard-memory") {
+        return Err(anyhow!(
+            "refusing to modify a directory that is not the clipboard-memory skill: {}",
+            target.display()
+        ));
+    }
+    Ok(())
+}
+
+pub(in crate::cli) fn uninstall_packaged_skill(
+    target: &Path,
+    files: &[PackagedSkillFile],
+) -> Result<()> {
+    validate_installed_skill(target, files)?;
+    for file in files {
+        let path = target.join(file.relative_path);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to remove {}", path.display()))
+            }
+        }
+    }
+    let mut directories: Vec<_> = files
+        .iter()
+        .flat_map(|file| {
+            let path = target.join(file.relative_path);
+            path.ancestors()
+                .skip(1)
+                .take_while(|path| path.starts_with(target))
+                .map(Path::to_path_buf)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    directories.dedup();
+    for directory in directories {
+        match std::fs::remove_dir(&directory) {
+            Ok(()) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                ) => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to remove {}", directory.display()))
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 pub(in crate::cli) fn set_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -50,6 +142,16 @@ pub(in crate::cli) fn set_executable(_path: &Path) -> Result<()> {
     // On non-Unix targets there is no concept of the executable bit to set;
     // scripts are invoked via their interpreter explicitly.
     Ok(())
+}
+
+pub(in crate::cli) fn expand_home_path(path: &Path) -> Result<PathBuf> {
+    if path == Path::new("~") {
+        return home_dir();
+    }
+    if let Ok(suffix) = path.strip_prefix("~") {
+        return Ok(home_dir()?.join(suffix));
+    }
+    Ok(path.to_path_buf())
 }
 
 pub(in crate::cli) fn home_dir() -> Result<PathBuf> {

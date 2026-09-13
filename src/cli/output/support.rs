@@ -26,7 +26,14 @@ pub(in crate::cli) fn render_filter_pairs(filters: &Value) -> String {
 }
 
 pub(in crate::cli) fn escape_markdown_cell(value: &str) -> String {
-    value.replace('|', "\\|")
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('|', "\\|")
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', "<br>")
 }
 
 pub(in crate::cli) fn truncate_for_markdown(value: &str, limit: usize) -> String {

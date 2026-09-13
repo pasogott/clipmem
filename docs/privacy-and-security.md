@@ -4,10 +4,15 @@ clipmem is local-only by design. All clipboard data stays on your
 machine, and there are multiple layers of control over what gets
 captured and how long it's kept.
 
-## No network, no telemetry
+## Local clipboard data, no telemetry
 
-clipmem makes no network calls and sends no telemetry. Your clipboard
-data never leaves your machine.
+Clipboard capture, search, restore, and OCR run locally without telemetry.
+The menu bar app checks GitHub for stable releases at startup and every
+12 hours, with a one-hour retry delay after failures. The CLI's explicit
+`app update-check run` command also contacts GitHub. These requests contain
+no clipboard contents. Agent integration commands can invoke an installed
+agent CLI; any agent you give clipboard access to follows its own provider
+and data-sharing settings.
 
 When OCR is enabled, image text recognition runs locally through Apple
 Vision on macOS. clipmem doesn't send images or OCR text to any remote
@@ -27,7 +32,7 @@ Logs are in the same directory under `logs/`.
 
 clipmem enforces strict file permissions at runtime:
 
-- Directory: `0700` (owner read/write/execute only)
+- Newly created archive directory: `0700` (owner read/write/execute only). Existing custom parent directories retain their permissions.
 - Database and logs: `0600` (owner read/write only)
 
 These permissions are enforced by the managed service setup flow and

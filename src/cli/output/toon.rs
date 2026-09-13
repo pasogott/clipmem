@@ -58,8 +58,8 @@ impl ToonSearchRowProjection {
             app_name: row.app_name.clone(),
             app_bundle_id: row.app_bundle_id.clone(),
             display_text: first_non_empty_text(&[
-                row.snippet.as_str(),
                 row.best_text.as_str(),
+                row.snippet.as_str(),
                 row.preview_text.as_str(),
                 row.projection.text_summary.as_str(),
             ]),
@@ -306,7 +306,7 @@ pub(in crate::cli) fn render_list_toon(envelope: &ListEnvelope) -> String {
     };
     let _ = writeln!(
         out,
-        "results[#{}\t]{{{}}}:",
+        "results[{}\t]{{{}}}:",
         envelope.results.len(),
         field_names.join("\t")
     );
@@ -392,7 +392,7 @@ pub(in crate::cli) fn render_recall_rows_toon(
 ) {
     let _ = writeln!(
         out,
-        "{key}[#{}\t]{{{}}}:",
+        "{key}[{}\t]{{{}}}:",
         rows.len(),
         ToonSearchRowProjection::field_names().join("\t")
     );
@@ -447,17 +447,17 @@ pub(in crate::cli) fn render_toon_array(
             .all(|value| !matches!(value, Value::Array(_) | Value::Object(_)))
     {
         if values.is_empty() {
-            let _ = writeln!(out, "{key_prefix}[#0\t]:");
+            let _ = writeln!(out, "{key_prefix}[0\t]:");
             return;
         }
 
-        let _ = write!(out, "{key_prefix}[#{}\t]: ", values.len());
+        let _ = write!(out, "{key_prefix}[{}\t]: ", values.len());
         push_toon_scalars_tab_separated(out, values);
         out.push('\n');
         return;
     }
 
-    let _ = writeln!(out, "{key_prefix}[#{}]:", values.len());
+    let _ = writeln!(out, "{key_prefix}[{}]:", values.len());
     for value in values {
         render_toon_list_item(out, value, indent + 2);
     }
@@ -529,25 +529,28 @@ pub(in crate::cli) fn push_toon_scalar(out: &mut String, value: &Value) {
 }
 
 pub(in crate::cli) fn push_toon_string(out: &mut String, text: &str) {
-    if text.is_empty()
-        || text.contains('\t')
-        || text.contains('\n')
-        || text.contains('\r')
-        || text.contains(':')
-        || text.contains('"')
-        || text.contains('\\')
-        || text.starts_with(' ')
-        || text.ends_with(' ')
-    {
+    let needs_quotes = text.is_empty()
+        || matches!(text, "true" | "false" | "null")
+        || text.parse::<f64>().is_ok()
+        || text.chars().any(|ch| {
+            ch.is_control() || matches!(ch, ':' | '"' | '\\' | '[' | ']' | '{' | '}' | ',')
+        })
+        || text.starts_with('-')
+        || text.starts_with('#')
+        || text.trim() != text;
+    if needs_quotes {
         out.push('"');
-        for character in text.chars() {
-            match character {
+        for ch in text.chars() {
+            match ch {
                 '\\' => out.push_str("\\\\"),
                 '"' => out.push_str("\\\""),
                 '\n' => out.push_str("\\n"),
                 '\r' => out.push_str("\\r"),
                 '\t' => out.push_str("\\t"),
-                other => out.push(other),
+                '\u{0000}'..='\u{001f}' => {
+                    let _ = write!(out, "\\u{:04x}", u32::from(ch));
+                }
+                _ => out.push(ch),
             }
         }
         out.push('"');
@@ -567,4 +570,19 @@ pub(in crate::cli) fn push_toon_scalars_tab_separated(out: &mut String, values: 
 
 fn estimated_list_toon_capacity(envelope: &ListEnvelope) -> usize {
     384 + envelope.results.len().saturating_mul(192)
+}
+
+#[cfg(test)]
+mod scalar_regressions {
+    #[test]
+    fn toon_controls_use_supported_escapes_and_preserve_literal_backslashes() {
+        let mut out = String::new();
+        super::push_toon_string(&mut out, "\u{0008}\u{000c}\u{0007}\\b\\f\n\r\t");
+        assert_eq!(out, r#""\u0008\u000c\u0007\\b\\f\n\r\t""#);
+        for text in ["#", "# comment"] {
+            out.clear();
+            super::push_toon_string(&mut out, text);
+            assert_eq!(out, format!("\"{text}\""));
+        }
+    }
 }

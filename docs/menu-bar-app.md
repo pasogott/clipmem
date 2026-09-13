@@ -113,7 +113,10 @@ This script runs `cargo build`, builds the app with `xcodebuild`, sets
 `CLIPMEM_BINARY_PATH` for the launched app, starts a matching debug
 watcher from `target/debug/clipmem`, and opens the built `.app` from
 `macos/ClipmemMenuBar/DerivedData`. The watcher pid and logs are stored
-under `macos/ClipmemMenuBar/DerivedData`.
+under `macos/ClipmemMenuBar/DerivedData`. The default development archive is
+`DerivedData/clipmem-dev.sqlite3`, and its watcher uses a separate `.dev`
+LaunchAgent label. Installed production watchers keep running. Use `--db PATH`
+to choose a different archive deliberately.
 
 Use `--app-only` when you need to launch only the app and leave the
 current watcher state untouched:

@@ -27,6 +27,24 @@ mod recall;
 pub(in crate::cli) use self::cursor::*;
 pub(in crate::cli) use self::recall::recall;
 
+fn classify_search_error(error: anyhow::Error) -> anyhow::Error {
+    let cause = error
+        .chain()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ");
+    if cause.contains("fts5: syntax error")
+        || cause.contains("unterminated string")
+        || cause.contains("no such column:")
+    {
+        crate::cli::errors::invalid_args_error(format!(
+            "invalid full-text query: {cause}; quote literal text or use --mode literal"
+        ))
+    } else {
+        error
+    }
+}
+
 pub(in crate::cli) fn search(db_path: &Path, args: &SearchArgs) -> Result<()> {
     let format = args.output.resolved()?;
     let filters = normalize_retrieval_filters(&args.filters)?;
@@ -37,8 +55,12 @@ pub(in crate::cli) fn search(db_path: &Path, args: &SearchArgs) -> Result<()> {
         .map(|value| parse_search_cursor(value, &args.query, search_mode, &filters))
         .transpose()?;
     let db = open_read_only_db(db_path)?;
+    let archive_state = db.search_archive_state()?;
+    if let Some(encoded) = args.cursor.as_deref() {
+        validate_search_archive_state(encoded, &archive_state)?;
+    }
     let results = anyhow::Context::with_context(
-        query_search_results(&db, args, &filters, cursor.as_ref()),
+        query_search_results(&db, args, &filters, cursor.as_ref()).map_err(classify_search_error),
         || format!("search failed for query '{}'", args.query),
     )?;
 
@@ -51,12 +73,24 @@ pub(in crate::cli) fn search(db_path: &Path, args: &SearchArgs) -> Result<()> {
             .hits()
             .last()
             .map(|hit| {
-                encode_search_cursor(&args.query, search_mode, &filters, results.mode_used(), hit)
+                let encoded = encode_search_cursor(
+                    &args.query,
+                    search_mode,
+                    &filters,
+                    results.mode_used(),
+                    hit,
+                )?;
+                bind_search_cursor(&encoded, &archive_state)
             })
             .transpose()?
     } else {
         None
     };
+    if db.search_archive_state()? != archive_state {
+        return Err(crate::cli::errors::invalid_args_error(
+            "archive changed during search; retry without --cursor",
+        ));
+    }
     let envelope = ListEnvelope {
         schema_version: OUTPUT_SCHEMA_VERSION,
         command: "search",

@@ -26,15 +26,15 @@ arch="$(uname -m)"
 case "${os}:${arch}" in
   Linux:x86_64)
     asset="cargo-dist-x86_64-unknown-linux-gnu.tar.xz"
-    expected_sha256="cd355dab0b4c02fb59038fef87655550021d07f45f1d82f947a34ef98560abb8"
+    expected_sha256="4b3f0a5f0ebbdb798f6db649d01b32ba1518376b6f7a0502b7d92b75cc2c8293"
     ;;
   Darwin:x86_64)
     asset="cargo-dist-x86_64-apple-darwin.tar.xz"
-    expected_sha256="fd4d8f9f07802359cbcdc52bac3abd7d5201c4b73a7cbcdd6faca2232a389f0c"
+    expected_sha256="6a49bfb61bd86770d79c27f3d2b40c6b2e71cde940d3d31a6ccaaffc124d7a29"
     ;;
   Darwin:arm64|Darwin:aarch64)
     asset="cargo-dist-aarch64-apple-darwin.tar.xz"
-    expected_sha256="decb01c64c12501931c3cac3111b368a7f48adf8d9e65455c08e5757b9a1fd6f"
+    expected_sha256="7b3cbe25511de01d74c0f5fcb7909edabd379bea9cfa284d93af5a3cdfa3247c"
     ;;
   *)
     echo "unsupported runner platform for cargo-dist bootstrap: ${os}/${arch}" >&2
@@ -44,7 +44,7 @@ case "${os}:${arch}" in
 esac
 
 case "${version}" in
-  0.31.0)
+  0.33.0)
     ;;
   *)
     echo "unsupported cargo-dist version: ${version}" >&2

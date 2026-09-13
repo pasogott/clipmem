@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
@@ -34,10 +34,26 @@ pub(in crate::cli) fn watch(db_path: &Path, args: &WatchArgs) -> Result<()> {
     let mut db = open_or_init_db(db_path)?;
     let interval_ms = args.interval_ms.max(50);
     let mut state = WatchState::new();
+    let _ocr_worker = start_ocr_worker(db.path().to_path_buf())?;
+    db.apply_retention_policy()
+        .context("apply retention at watcher startup")?;
+    let mut retention_checked_at = Instant::now();
 
     loop {
+        if retention_checked_at.elapsed() >= Duration::from_secs(30) {
+            retention_checked_at = Instant::now();
+            match db.apply_retention_policy() {
+                Ok(Some(report)) if report.snapshot_count() > 0 => notify_app_refresh(),
+                Ok(_) => {}
+                Err(error) => eprintln!("retention maintenance failed: {error:#}"),
+            }
+        }
         if let Err(err) = run_watch_iteration(&mut db, args, &mut state) {
-            eprintln!("{err:#}");
+            if crate::cli::terminal::is_broken_pipe(&err) {
+                return Ok(());
+            }
+            crate::cli::terminal::write_error(&format!("{err:#}\n"));
+            thread::sleep(Duration::from_secs(1));
         }
 
         thread::sleep(Duration::from_millis(interval_ms));
@@ -63,6 +79,10 @@ where
     CountFn: FnOnce() -> Result<i64>,
     CaptureFn: FnOnce() -> Result<ClipboardSnapshot>,
 {
+    // Pausing must stop content reads as well as database writes.
+    if db.capture_settings()?.paused() {
+        return Ok(());
+    }
     let change_count = current_change_count_fn()
         .map_err(|error| platform_error(format!("read clipboard change count failed: {error}")))?;
 
@@ -81,6 +101,10 @@ where
         return Ok(());
     }
 
+    if snapshot.items().is_empty() {
+        // Lazy providers can populate this same generation on a later poll.
+        return Ok(());
+    }
     let outcome = CaptureApplicationService::new(db).capture(&snapshot, CaptureMode::Watch)?;
     match outcome {
         CaptureOutcome::Stored {
@@ -91,22 +115,20 @@ where
             store: result,
             enqueue_ocr,
         } => {
-            if enqueue_ocr {
-                start_ocr_worker(db.path().to_path_buf());
-            }
+            let _ = enqueue_ocr; // The watcher-owned worker drains durable capture jobs.
             mark_change_handled(snapshot.change_count(), state);
             db.apply_retention_policy()
                 .context("apply retention policy failed")?;
             notify_app_refresh();
             if !args.quiet {
-                println!("{}", format_watch_capture_line(&snapshot, &result));
+                displayln!("{}", format_watch_capture_line(&snapshot, &result));
             }
         }
         other => {
             mark_change_handled(snapshot.change_count(), state);
             let reason = capture_outcome_skip_reason(&other);
             if !args.quiet {
-                println!(
+                displayln!(
                     "skipped capture reason={} kind={} bytes={} source={}",
                     capture_skip_reason_label(reason),
                     snapshot.snapshot_kind(),
@@ -135,6 +157,7 @@ fn capture_outcome_skip_reason(outcome: &CaptureOutcome) -> CaptureSkipReason {
             CaptureSkipReason::IgnoredApp
         }
         CaptureOutcome::SkippedSensitive => CaptureSkipReason::ApiKeyFilter,
+        CaptureOutcome::SkippedPrivateMarker => CaptureSkipReason::PrivateClipboardMarker,
         CaptureOutcome::TransientPlatformChange => CaptureSkipReason::TransientPlatformChange,
         CaptureOutcome::Stored { .. } | CaptureOutcome::ObservedExisting { .. } => {
             unreachable!("stored outcomes do not have skip reasons")
@@ -142,33 +165,63 @@ fn capture_outcome_skip_reason(outcome: &CaptureOutcome) -> CaptureSkipReason {
     }
 }
 
-pub(in crate::cli) fn start_ocr_worker(db_path: PathBuf) {
-    let Some(worker_registration) = claim_ocr_worker(&db_path) else {
-        return;
-    };
+struct OcrWorker {
+    stop: std::sync::mpsc::Sender<()>,
+    thread: Option<thread::JoinHandle<()>>,
+}
 
-    thread::spawn(move || {
-        let _worker_registration = worker_registration;
-        let run = || -> Result<()> {
-            let mut worker_db = Database::open_or_init_and_migrate(&db_path)?;
-            let engine = crate::ocr::default_engine();
-            let mut processed = 0usize;
-            loop {
-                let report = crate::ocr::run_ocr_jobs(&mut worker_db, &engine, 1, None, false)?;
-                if report.processed() == 0 {
-                    break;
-                }
-                processed += report.processed();
+impl Drop for OcrWorker {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(thread) = self.thread.take() {
+            if thread.join().is_err() {
+                eprintln!("OCR worker panicked during shutdown");
             }
-            if processed > 0 {
-                notify_app_refresh();
-            }
-            Ok(())
-        };
-        if let Err(err) = run() {
-            eprintln!("ocr failed: {err:#}");
         }
-    });
+    }
+}
+
+fn start_ocr_worker(db_path: PathBuf) -> Result<Option<OcrWorker>> {
+    let Some(registration) = claim_ocr_worker(&db_path) else {
+        return Ok(None);
+    };
+    let (stop, receiver) = std::sync::mpsc::channel();
+    let thread = thread::Builder::new()
+        .name("clipmem-ocr".into())
+        .spawn(move || {
+            let _registration = registration;
+            let engine = crate::ocr::default_engine();
+            loop {
+                let run = || -> Result<usize> {
+                    let mut db = Database::open_read_write_current(&db_path)?;
+                    if !db.capture_settings()?.ocr_enabled() {
+                        return Ok(0);
+                    }
+                    let report = crate::ocr::run_queued_ocr_jobs(&mut db, &engine, 1)?;
+                    if report.processed() > 0 {
+                        notify_app_refresh();
+                    }
+                    Ok(report.processed())
+                };
+                let delay = match run() {
+                    Ok(0) => Duration::from_secs(1),
+                    Ok(_) => Duration::ZERO,
+                    Err(error) => {
+                        eprintln!("ocr failed: {error:#}");
+                        Duration::from_secs(5)
+                    }
+                };
+                match receiver.recv_timeout(delay) {
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                }
+            }
+        })
+        .context("start OCR worker")?;
+    Ok(Some(OcrWorker {
+        stop,
+        thread: Some(thread),
+    }))
 }
 
 fn claim_ocr_worker(db_path: &Path) -> Option<OcrWorkerRegistration> {
@@ -216,7 +269,7 @@ pub(in crate::cli) fn capture_once(db_path: &Path, args: &CaptureOnceArgs) -> Re
             .map_err(|error| platform_error(format!("capture-once clipboard read failed: {error}")))
     })?;
     if args.human {
-        print!("{}", render_capture_once_human(&payload));
+        display!("{}", render_capture_once_human(&payload));
     } else {
         emit_json_or_text(args.json, &payload, render_capture_once_text)?;
     }
@@ -231,17 +284,35 @@ fn capture_once_payload<CaptureFn>(
 where
     CaptureFn: FnOnce() -> Result<ClipboardSnapshot>,
 {
+    if db.capture_settings()?.paused() {
+        return Ok(CaptureOnceOutput::Skipped(CaptureOnceSkippedOutput {
+            status: "skipped",
+            reason: CaptureSkipReason::Paused,
+            kind: "unknown".into(),
+            total_bytes: 0,
+            frontmost_app_name: None,
+            frontmost_app_bundle_id: None,
+        }));
+    }
     let snapshot = capture_snapshot_fn()?;
     let payload =
         match CaptureApplicationService::new(db).capture(&snapshot, CaptureMode::Manual)? {
             CaptureOutcome::Stored { store, enqueue_ocr }
             | CaptureOutcome::ObservedExisting { store, enqueue_ocr } => {
-                if enqueue_ocr {
-                    start_ocr_worker(db.path().to_path_buf());
-                }
+                let ocr_completion = if enqueue_ocr {
+                    crate::ocr::finish_snapshot_ocr(
+                        db,
+                        &crate::ocr::default_engine(),
+                        store.snapshot_id(),
+                        std::time::Duration::from_secs(30),
+                    )
+                } else {
+                    Ok(())
+                };
                 db.apply_retention_policy()
                     .context("apply retention policy failed")?;
                 notify_app_refresh();
+                ocr_completion?;
                 CaptureOnceOutput::Stored(CaptureOnceStoredOutput { store, snapshot })
             }
             outcome => {

@@ -52,3 +52,47 @@ pub(super) fn enforce_representation_item_integrity(conn: &Connection) -> Result
     .context("rebuild item_representations with composite foreign key")?;
     Ok(())
 }
+
+pub(super) fn secure_fts_indexes(conn: &Connection) -> Result<()> {
+    for table in [
+        "snapshots_fts",
+        "snapshots_literal_fts",
+        "snapshot_file_url_fts",
+        "snapshot_ocr_fts",
+        "snapshot_ocr_literal_fts",
+        "snapshot_search_documents_fts",
+        "snapshot_search_documents_literal_fts",
+    ] {
+        // Names are a fixed application-owned list, never user input.
+        conn.execute(
+            &format!("INSERT INTO {table}({table}, rank) VALUES ('secure-delete', 1)"),
+            [],
+        )
+        .with_context(|| format!("enable secure deletion for {table}"))?;
+        conn.execute(
+            &format!("INSERT INTO {table}({table}) VALUES ('rebuild')"),
+            [],
+        )
+        .with_context(|| format!("remove legacy deletion tombstones from {table}"))?;
+    }
+    Ok(())
+}
+
+pub(in crate::db) fn legacy_prerelease_schema_detected(conn: &Connection) -> Result<bool> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(item_representations)")
+        .context("prepare PRAGMA table_info(item_representations)")?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .context("read item_representations columns")?;
+    let columns = super::collect_rows(rows).context("collect item_representations columns")?;
+    if columns.is_empty() {
+        return Ok(false);
+    }
+
+    let has_kind = columns.iter().any(|column| column == "kind");
+    let has_legacy_marker = super::LEGACY_PRERELEASE_COLUMNS
+        .iter()
+        .any(|legacy| columns.iter().any(|column| column == legacy));
+    Ok(!has_kind || has_legacy_marker)
+}

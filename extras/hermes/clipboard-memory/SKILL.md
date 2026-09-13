@@ -1,7 +1,7 @@
 ---
 name: clipboard-memory
 description: Recall what the user copied on this Mac via the local clipmem archive: exact text, commands, SQL, URLs, file paths, HTML, images, and PDFs. Trigger on requests like "what was that command I copied?", "paste back that SQL", "the URL I copied from Safari", "show me what I copied from Xcode today", "find the snippet/path/link from before I restarted", and indirect paraphrases about clipboard history or recovering copied content. Prefer this over web, repo, or filesystem search only when the target was likely copied.
-version: "1.3.8"
+version: "1.3.9"
 license: MIT
 platforms: [macos]
 metadata:
@@ -101,7 +101,7 @@ Before querying, confirm the setup is healthy. Empty results can mean the
 watcher is stale, not that the archive has no match.
 
 1. Background capture must be running. `clipmem setup` is the canonical fix;
-   Homebrew users can also use `brew services start clipmem`.
+   Homebrew users can also use `clipmem service start`.
 2. The binary `clipmem` must be on PATH with access to
    `~/Library/Application Support/clipmem/clipmem.sqlite3`.
 3. Run [`scripts/check-setup.sh`](scripts/check-setup.sh) when results look

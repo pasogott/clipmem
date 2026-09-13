@@ -35,6 +35,12 @@ pub(in crate::cli) fn render_list_human(envelope: &ListEnvelope) -> String {
 pub(in crate::cli) fn render_recall_human(envelope: &RecallEnvelope) -> String {
     let theme = HumanTheme::detect();
     let best = &envelope.best_candidate;
+    let full = envelope
+        .applied_filters
+        .get("full")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let limit = if full { usize::MAX } else { 480 };
     let mut out = header(&theme, "clipmem Recall");
     let _ = writeln!(
         out,
@@ -48,10 +54,10 @@ pub(in crate::cli) fn render_recall_human(envelope: &RecallEnvelope) -> String {
     out.push_str(&separator(60, false));
     out.push('\n');
     if let Some(quoted_text) = &envelope.quoted_text {
-        out.push_str(&truncate_multiline(quoted_text, 480));
+        out.push_str(&truncate_multiline(quoted_text, limit));
         out.push('\n');
     } else if !best.best_text.trim().is_empty() {
-        out.push_str(&truncate_multiline(&best.best_text, 480));
+        out.push_str(&truncate_multiline(&best.best_text, limit));
         out.push('\n');
     } else {
         out.push_str("No direct text was recovered for this clipboard item.\n");

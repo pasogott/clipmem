@@ -41,6 +41,43 @@ impl OcrCandidate {
 }
 
 impl Database {
+    pub(crate) fn with_ocr_lease_renewal<T>(
+        &self,
+        candidate: &OcrCandidate,
+        operation: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        if self.path == std::path::Path::new(":memory:") {
+            return operation();
+        }
+        let path = self.path.clone();
+        let lease = candidate.lease.clone();
+        let (stop, receiver) = std::sync::mpsc::sync_channel(1);
+        let heartbeat = std::thread::Builder::new()
+            .name("clipmem-ocr-lease".into())
+            .spawn(move || -> Result<()> {
+                loop {
+                    match receiver.recv_timeout(std::time::Duration::from_secs(30)) {
+                        Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                            return Ok(())
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            let mut db = Database::open_read_write_current(&path)?;
+                            if !db.renew_job(&lease)? {
+                                anyhow::bail!("OCR lease ownership was lost during recognition");
+                            }
+                        }
+                    }
+                }
+            })
+            .context("start OCR lease renewal")?;
+        let result = operation();
+        let _ = stop.send(());
+        heartbeat
+            .join()
+            .map_err(|_| anyhow::anyhow!("OCR lease renewal thread panicked"))??;
+        result
+    }
+
     pub(crate) fn store_ocr_candidate_text(
         &mut self,
         candidate: &OcrCandidate,
@@ -151,6 +188,14 @@ impl Database {
             bump_revision_tx(&tx, &[ArchiveChangeKind::Ocr])?;
         }
         tx.commit().context("commit ocr candidate transaction")?;
+        self.claim_pending_ocr_candidates(limit, snapshot_id)
+    }
+
+    pub(crate) fn claim_pending_ocr_candidates(
+        &mut self,
+        limit: usize,
+        snapshot_id: Option<i64>,
+    ) -> Result<Vec<OcrCandidate>> {
         let requested = clamp_result_limit(limit);
         let owner = format!("ocr-{}", std::process::id());
         let mut candidates = Vec::with_capacity(requested);
@@ -320,6 +365,20 @@ impl Database {
             .context("load ocr status report")
     }
 
+    pub(crate) fn snapshot_has_outstanding_ocr(&self, snapshot_id: i64) -> Result<bool> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM jobs j
+             WHERE j.kind = ?1 AND j.algorithm_version = ?2
+               AND j.state IN ('queued', 'leased')
+               AND EXISTS (SELECT 1 FROM item_representations ir
+                   WHERE ir.snapshot_id = ?3 AND ir.raw_sha256 = j.dedupe_key))",
+                params![OCR_JOB_KIND, OCR_ALGORITHM_VERSION, snapshot_id],
+                |row| row.get(0),
+            )
+            .context("check captured snapshot OCR completion")
+    }
+
     pub(crate) fn ocr_candidate_summaries(
         &self,
         limit: usize,
@@ -470,7 +529,10 @@ pub(in crate::db) fn enqueue_ocr_candidates_tx(
     Ok(inserted)
 }
 
-fn enqueue_ocr_jobs_tx(tx: &rusqlite::Transaction<'_>, snapshot_id: Option<i64>) -> Result<usize> {
+pub(in crate::db) fn enqueue_ocr_jobs_tx(
+    tx: &rusqlite::Transaction<'_>,
+    snapshot_id: Option<i64>,
+) -> Result<usize> {
     let mut stmt = tx.prepare(
         r"
             SELECT DISTINCT o.raw_sha256
@@ -557,7 +619,9 @@ pub(in crate::db) fn enqueue_ocr_for_snapshot_tx(
     tx: &rusqlite::Transaction<'_>,
     snapshot_id: i64,
 ) -> Result<usize> {
-    enqueue_ocr_candidates_tx(tx, Some(snapshot_id))
+    let inserted = enqueue_ocr_candidates_tx(tx, Some(snapshot_id))?;
+    enqueue_ocr_jobs_tx(tx, Some(snapshot_id))?;
+    Ok(inserted)
 }
 
 pub(in crate::db) fn rebuild_snapshot_ocr_cache_for_hash(

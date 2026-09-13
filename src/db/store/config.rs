@@ -1,3 +1,4 @@
+pub(in crate::db) const IMAGE_PREVIEW_MAX_SOURCE_BYTES: usize = 128 * 1024 * 1024;
 pub(in crate::db) const WEBP_UTI: &str = "org.webmproject.webp";
 pub(in crate::db) const IMAGE_OPTIMIZATION_FORMAT: &str = "webp_lossless";
 pub(in crate::db) const IMAGE_OPTIMIZATION_MAX_DIMENSION: u32 = 16_384;

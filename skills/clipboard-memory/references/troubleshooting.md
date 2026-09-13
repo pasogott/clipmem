@@ -39,7 +39,7 @@ If `stale: true` or neither the Homebrew service nor the direct LaunchAgent is r
 ```bash
 clipmem setup
 # or, for Homebrew-native management:
-brew services start clipmem
+clipmem service start
 ```
 
 ---

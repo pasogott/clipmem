@@ -121,6 +121,55 @@ mod tests {
     }
 
     #[test]
+    fn empty_generation_is_retried_and_pause_does_not_read_content() {
+        let mut db = Database::open_in_memory().unwrap();
+        let args = WatchArgs {
+            interval_ms: 350,
+            quiet: true,
+            skip_initial: false,
+        };
+        let mut state = WatchState::new();
+        run_watch_iteration_with_capture(
+            &mut db,
+            &args,
+            &mut state,
+            || Ok(7),
+            || Ok(build_snapshot(CaptureContext::new(7), vec![])),
+        )
+        .unwrap();
+        run_watch_iteration_with_capture(
+            &mut db,
+            &args,
+            &mut state,
+            || Ok(7),
+            || {
+                Ok(build_snapshot(
+                    CaptureContext::new(7),
+                    vec![build_item(
+                        0,
+                        vec![build_representation(
+                            "public.utf8-plain-text".into(),
+                            None,
+                            b"late payload".to_vec(),
+                        )],
+                    )],
+                ))
+            },
+        )
+        .unwrap();
+        assert_eq!(db.recent(10, &unfiltered()).unwrap().hits().len(), 1);
+        db.set_paused(true).unwrap();
+        run_watch_iteration_with_capture(
+            &mut db,
+            &args,
+            &mut state,
+            || panic!("pause must not read clipboard count"),
+            || panic!("pause must not read clipboard content"),
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn search_query_dispatches_literal_mode_against_database() {
         let path = temp_db_path("search-literal");
         let mut db = Database::open_or_init(&path).expect("test database should open");
@@ -484,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn watch_iteration_skips_paused_changes_and_marks_them_handled() {
+    fn watch_iteration_skips_paused_changes_without_reading_content() {
         let path = temp_db_path("watch-paused");
         let mut db = Database::open_or_init(&path).expect("test database should open");
         db.set_paused(true).expect("pause setting should persist");
@@ -520,7 +569,7 @@ mod tests {
         );
 
         assert!(first.is_ok());
-        assert_eq!(capture_calls.get(), 1);
+        assert_eq!(capture_calls.get(), 0);
         assert!(db.recent(10, &unfiltered()).unwrap().hits().is_empty());
 
         let second = run_watch_iteration_with_capture(
@@ -528,7 +577,7 @@ mod tests {
             &args,
             &mut state,
             || Ok(5),
-            || panic!("paused change count should have been marked handled"),
+            || panic!("paused clipboard should not be read"),
         );
 
         assert!(second.is_ok());

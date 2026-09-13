@@ -85,6 +85,8 @@ impl Database {
         }
         tx.commit()
             .context("commit retention setting transaction")?;
+        self.apply_retention_policy()
+            .context("retention saved but immediate cleanup failed")?;
         self.capture_settings()
     }
 

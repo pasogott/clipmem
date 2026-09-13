@@ -61,7 +61,7 @@ pub(in crate::cli) fn run_command(command: Command, db_path: &Path) -> Result<()
 
 pub(in crate::cli) fn setup(db_path: &Path, _args: &SetupArgs) -> Result<()> {
     let report = service_api::setup(db_path)?;
-    print!("{}", render_setup_text(&report));
+    display!("{}", render_setup_text(&report));
     Ok(())
 }
 
@@ -71,18 +71,18 @@ pub(in crate::cli) fn service(db_path: &Path, args: &ServiceArgs) -> Result<()> 
         ServiceCommand::Revision(args) => service_revision(db_path, args),
         ServiceCommand::Start => {
             let report = service_api::start(db_path)?;
-            print!("{}", render_service_action_text(&report));
+            display!("{}", render_service_action_text(&report));
             Ok(())
         }
         ServiceCommand::Stop => {
             let report = service_api::stop(db_path)?;
-            print!("{}", render_service_action_text(&report));
+            display!("{}", render_service_action_text(&report));
             Ok(())
         }
         ServiceCommand::Status(status_args) => service_status(db_path, status_args),
         ServiceCommand::Uninstall => {
             let report = service_api::uninstall(db_path)?;
-            print!("{}", render_service_action_text(&report));
+            display!("{}", render_service_action_text(&report));
             Ok(())
         }
     }
@@ -155,11 +155,11 @@ fn render_service_providers_text(output: &ServiceProvidersOutput) -> String {
 pub(in crate::cli) fn service_status(db_path: &Path, args: &ServiceStatusArgs) -> Result<()> {
     let report = service_api::status_report(db_path)?;
     if args.human {
-        print!("{}", render_service_status_human(&report));
+        display!("{}", render_service_status_human(&report));
     } else if args.json {
         emit_json_or_text(true, &report, render_service_status_text)?;
     } else {
-        print!("{}", render_service_status_text(&report));
+        display!("{}", render_service_status_text(&report));
     }
     Ok(())
 }
@@ -182,7 +182,7 @@ pub(in crate::cli) fn openclaw(args: &OpenClawArgs) -> Result<()> {
         OpenClawCommand::InstallSkill(args) => openclaw_install_skill(args),
         OpenClawCommand::UninstallSkill(args) => openclaw_uninstall_skill(args),
         OpenClawCommand::PrintSkill => {
-            print!("{}", packaged_openclaw_skill());
+            display!("{}", packaged_openclaw_skill());
             Ok(())
         }
         OpenClawCommand::Doctor(args) => openclaw_doctor(args),
@@ -194,7 +194,7 @@ pub(in crate::cli) fn hermes(args: &HermesArgs) -> Result<()> {
         HermesCommand::InstallSkill(args) => hermes_install_skill(args),
         HermesCommand::UninstallSkill(args) => hermes_uninstall_skill(args),
         HermesCommand::PrintSkill => {
-            print!("{}", packaged_hermes_skill());
+            display!("{}", packaged_hermes_skill());
             Ok(())
         }
         HermesCommand::Doctor(args) => hermes_doctor(args),

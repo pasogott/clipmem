@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use super::ClipboardKind;
 
-pub const TEXT_PROJECTION_VERSION: u32 = 3;
+pub const TEXT_PROJECTION_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

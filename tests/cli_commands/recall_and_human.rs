@@ -69,14 +69,17 @@ fn agents_openclaw_install_print_and_uninstall_skill_work() -> Result<()> {
 }
 
 #[test]
-fn agents_openclaw_install_force_replaces_existing_skill_directory() -> Result<()> {
+fn agents_openclaw_install_force_preserves_unmanaged_skill_files() -> Result<()> {
     let test_dir = temp_test_dir("openclaw-install-force");
     let bin_dir = test_dir.join("bin");
     let workspace_dir = test_dir.join("workspace");
     let install_dir = workspace_dir.join("skills").join("clipboard-memory");
     fs::create_dir_all(&bin_dir)?;
     fs::create_dir_all(&install_dir)?;
-    fs::write(install_dir.join("SKILL.md"), "stale skill")?;
+    fs::write(
+        install_dir.join("SKILL.md"),
+        "---\nname: clipboard-memory\n---\nstale skill",
+    )?;
     fs::write(install_dir.join("old-file.txt"), "remove me")?;
 
     let openclaw_path = bin_dir.join("openclaw");
@@ -95,7 +98,10 @@ fn agents_openclaw_install_force_replaces_existing_skill_directory() -> Result<(
     );
 
     assert!(install.status.success(), "{}", stderr_text(&install));
-    assert!(!install_dir.join("old-file.txt").exists());
+    assert_eq!(
+        fs::read_to_string(install_dir.join("old-file.txt"))?,
+        "remove me"
+    );
     assert!(fs::read_to_string(install_dir.join("SKILL.md"))?.contains("clipboard-memory"));
     assert!(install_dir.join("references/commands.md").is_file());
     assert!(install_dir.join("scripts/check-setup.sh").is_file());
@@ -369,6 +375,33 @@ fn recall_json_alias_prefers_a_strong_query_match() -> Result<()> {
 }
 
 #[test]
+fn recall_keeps_uncalibrated_quoted_and_boolean_matches() -> Result<()> {
+    let path = temp_db_path("recall-complex-fts");
+    let ids = seed_database(
+        &path,
+        &[
+            text_snapshot(1, "git status"),
+            text_snapshot(2, "lunch plans"),
+        ],
+    )?;
+    for query in ["\"git status\"", "git AND status"] {
+        let output = run_cli(&["--db", path.to_str().unwrap(), "recall", query, "--json"]);
+        assert!(output.status.success(), "{}", stderr_text(&output));
+        let payload: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(
+            payload["best_candidate"]["snapshot_id"].as_i64(),
+            Some(ids[0])
+        );
+        assert!(!payload["why_selected"]
+            .as_str()
+            .unwrap()
+            .contains("Fell back"));
+    }
+    cleanup_db(&path);
+    Ok(())
+}
+
+#[test]
 fn recall_json_falls_back_to_recent_when_search_is_weak() -> Result<()> {
     let path = temp_db_path("recall-weak-search");
     let ids = seed_database(
@@ -410,6 +443,9 @@ fn recall_json_falls_back_to_recent_when_search_is_weak() -> Result<()> {
         .unwrap_or_default()
         .contains("Fell back to recent clipboard items"));
 
+    assert_eq!(payload["match_kind"], "recent_fallback");
+    assert!(payload["best_match_score"].is_null());
+    assert_eq!(payload["best_match_confidence"], "low");
     cleanup_db(&path);
     Ok(())
 }
@@ -652,9 +688,9 @@ fn recall_toon_output_is_flattened() -> Result<()> {
 
     assert!(output.status.success());
     assert!(stdout.contains(
-        "best_candidate[#1\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"
+        "best_candidate[1\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"
     ));
-    assert!(stdout.contains("alternatives[#0\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"));
+    assert!(stdout.contains("alternatives[0\t]{snapshot_id\tevent_id\tobserved_at\tfirst_seen_at\tlast_seen_at\tkind\tapp_name\tapp_bundle_id\tdisplay_text\tcapture_count\titem_count\ttotal_bytes\tscore\twhy_matched}:"));
     assert!(!stdout.contains("matched_fields"));
     assert!(!stdout.contains("snippet\t"));
     assert!(!stdout.contains("sha256"));
@@ -716,61 +752,6 @@ fn retrieval_commands_support_human_output() -> Result<()> {
     assert_human_output(&timeline_stdout, "clipmem Timeline");
     assert!(timeline_stdout.contains("Event"));
     assert!(timeline_stdout.contains("Snapshot"));
-
-    cleanup_db(&path);
-    Ok(())
-}
-
-#[test]
-fn recall_stats_and_get_support_human_output() -> Result<()> {
-    let path = temp_db_path("recall-stats-get-human");
-    let ids = seed_database(
-        &path,
-        &[
-            text_snapshot(1, "cargo test --package clipmem"),
-            app_text_snapshot(2, "Safari", "com.apple.Safari", "release notes draft"),
-        ],
-    )?;
-
-    let recall = run_cli(&[
-        "--db",
-        path.to_str().expect("db path should be UTF-8"),
-        "recall",
-        "cargo test",
-        "--human",
-    ]);
-    let recall_stdout = stdout_text(&recall);
-    assert!(recall.status.success());
-    assert_human_output(&recall_stdout, "clipmem Recall");
-    assert!(recall_stdout.contains("Best Match"));
-    assert!(recall_stdout.contains("cargo test"));
-    assert!(recall_stdout.contains("Provenance"));
-
-    let stats = run_cli(&[
-        "--db",
-        path.to_str().expect("db path should be UTF-8"),
-        "stats",
-        "--human",
-    ]);
-    let stats_stdout = stdout_text(&stats);
-    assert!(stats.status.success());
-    assert_human_output(&stats_stdout, "clipmem Archive Stats");
-    assert!(stats_stdout.contains("Dedupe meter"));
-    assert!(stats_stdout.contains("Content Mix"));
-    assert!(stats_stdout.contains("Top Apps"));
-
-    let get = run_cli(&[
-        "--db",
-        path.to_str().expect("db path should be UTF-8"),
-        "get",
-        &ids[0].to_string(),
-        "--human",
-    ]);
-    let get_stdout = stdout_text(&get);
-    assert!(get.status.success());
-    assert_human_output(&get_stdout, "clipmem Snapshot");
-    assert!(get_stdout.contains("Items"));
-    assert!(get_stdout.contains("cargo test"));
 
     cleanup_db(&path);
     Ok(())

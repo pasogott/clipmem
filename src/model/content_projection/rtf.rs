@@ -100,6 +100,12 @@ pub fn project_rtf(input: &str) -> TextProjectionResult {
                         );
                         out.push(control.symbol().unwrap() as char)
                     }
+                    Control::Symbol(b'~') if !state.skip => out.push('\u{00a0}'),
+                    Control::Symbol(b'_') if !state.skip => out.push('\u{2011}'),
+                    Control::Symbol(b'-') if !state.skip => out.push('\u{00ad}'),
+                    Control::Symbol(byte) if !byte.is_ascii() => {
+                        diagnostics.push(ProjectionDiagnostic::MalformedMarkup);
+                    }
                     Control::Symbol(b'*') => {
                         flush_pending_surrogate(
                             &mut out,
@@ -281,7 +287,11 @@ fn parse_control(bytes: &[u8], start: usize) -> (usize, Control<'_>) {
         }
     }
     if !bytes[start].is_ascii_alphabetic() {
-        return (start + 1, Control::Symbol(bytes[start]));
+        let mut end = start + 1;
+        while end < bytes.len() && (bytes[end] & 0xc0) == 0x80 {
+            end += 1;
+        }
+        return (end, Control::Symbol(bytes[start]));
     }
     let mut i = start;
     while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
@@ -367,6 +377,17 @@ fn normalize(text: &str) -> String {
 mod tests {
     use super::{project_rtf, MAX_GROUP_DEPTH};
     use crate::model::ProjectionDiagnostic;
+
+    #[test]
+    fn malformed_non_ascii_controls_keep_utf8_boundaries() {
+        for symbol in ["é", "😀", "中"] {
+            let result = project_rtf(&format!("{{\\rtf1 before \\{symbol} after}}"));
+            assert_eq!(result.text, "before after");
+            assert!(result
+                .diagnostics
+                .contains(&ProjectionDiagnostic::MalformedMarkup));
+        }
+    }
 
     #[test]
     fn unicode_fallback_destinations_and_escapes() {

@@ -1,3 +1,4 @@
+use super::support::expand_home_path;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
@@ -111,11 +112,14 @@ pub(in crate::cli) fn resolve_openclaw_skill_dir(
     shared: bool,
 ) -> Result<PathBuf> {
     if let Some(dest) = dest {
-        return Ok(dest.to_path_buf());
+        return expand_home_path(dest);
     }
 
     let base = if shared {
-        home_dir()?.join(OPENCLAW_SHARED_ROOT)
+        match std::env::var_os("OPENCLAW_STATE_DIR") {
+            Some(path) => expand_home_path(Path::new(&path))?.join("skills"),
+            None => home_dir()?.join(OPENCLAW_SHARED_ROOT),
+        }
     } else {
         resolve_openclaw_workspace_root()?.join("skills")
     };
@@ -124,7 +128,7 @@ pub(in crate::cli) fn resolve_openclaw_skill_dir(
 
 pub(in crate::cli) fn resolve_openclaw_workspace_root() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("CLIPMEM_OPENCLAW_WORKSPACE") {
-        return Ok(PathBuf::from(path));
+        return expand_home_path(Path::new(&path));
     }
 
     if let Some(openclaw_bin) = find_executable("openclaw") {
@@ -135,7 +139,8 @@ pub(in crate::cli) fn resolve_openclaw_workspace_root() -> Result<PathBuf> {
             if output.status.success() {
                 let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !value.is_empty() {
-                    return Ok(PathBuf::from(value));
+                    let value = serde_json::from_str::<String>(&value).unwrap_or(value);
+                    return expand_home_path(Path::new(&value));
                 }
             }
         }
@@ -183,10 +188,14 @@ pub(in crate::cli) fn packaged_hermes_files() -> &'static [PackagedSkillFile] {
 
 pub(in crate::cli) fn resolve_hermes_skill_dir(dest: Option<&Path>) -> Result<PathBuf> {
     if let Some(dest) = dest {
-        return Ok(dest.to_path_buf());
+        return expand_home_path(dest);
     }
 
-    Ok(home_dir()?.join(HERMES_SKILL_ROOT).join(HERMES_SKILL_NAME))
+    let root = match std::env::var_os("HERMES_HOME") {
+        Some(path) => expand_home_path(Path::new(&path))?.join("skills/productivity"),
+        None => home_dir()?.join(HERMES_SKILL_ROOT),
+    };
+    Ok(root.join(HERMES_SKILL_NAME))
 }
 
 #[cfg(test)]

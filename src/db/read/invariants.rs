@@ -25,7 +25,7 @@ pub(super) fn verify(conn: &Connection) -> Result<DoctorIntegrityReport> {
           LEFT JOIN snapshot_ocr_cache o ON o.snapshot_id=d.snapshot_id
           WHERE d.snapshot_id IS NULL
              OR ss.snapshot_id IS NULL
-             OR d.builder_version != 3
+             OR d.builder_version != 4
              OR d.has_native_text != (trim(d.native_text) != '')
              OR d.has_ocr_text != (trim(d.ocr_text) != '')
              OR d.has_url != (trim(d.url_text) != '')

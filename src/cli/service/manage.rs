@@ -55,7 +55,15 @@ pub(crate) fn stop(db_path: &Path) -> Result<ServiceActionReport> {
     let context = build_context(db_path)?;
     let status = status_report(db_path)?;
     if status.conflict {
-        bail!(conflict_message());
+        launchctl_bootout(HOMEBREW_LABEL)?;
+        launchctl_disable(HOMEBREW_LABEL)?;
+        let mut report = stop_direct_provider(&context)?;
+        report
+            .notes
+            .push("Stopped both conflicting clipmem watcher providers.".into());
+        bump_service_revision(db_path);
+        notify_app_refresh();
+        return Ok(report);
     }
 
     let report = if status.homebrew.installed || status.homebrew.loaded || status.homebrew.running {
@@ -73,7 +81,22 @@ pub(crate) fn uninstall(db_path: &Path) -> Result<ServiceActionReport> {
     let context = build_context(db_path)?;
     let status = status_report(db_path)?;
     if status.conflict {
-        bail!(conflict_message());
+        launchctl_bootout(HOMEBREW_LABEL)?;
+        launchctl_disable(HOMEBREW_LABEL)?;
+        match fs::remove_file(&context.homebrew_plist_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).context("remove conflicting Homebrew LaunchAgent plist")
+            }
+        }
+        let mut report = uninstall_direct_provider(&context)?;
+        report
+            .notes
+            .push("Uninstalled both conflicting clipmem watcher providers.".into());
+        bump_service_revision(db_path);
+        notify_app_refresh();
+        return Ok(report);
     }
 
     let report = if status.homebrew.installed || status.homebrew.loaded || status.homebrew.running {

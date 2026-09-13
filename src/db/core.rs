@@ -11,6 +11,50 @@ use super::types::{
     ArchiveChangeKind, Database, StorageCheckpointReport, StorageCompactReport, StorageFileSizes,
 };
 
+fn validate_initialization_target(conn: &Connection) -> Result<()> {
+    let application_id: i64 = conn.query_row("PRAGMA application_id", [], |row| row.get(0))?;
+    if application_id != 0 && application_id != CLIPMEM_APPLICATION_ID {
+        bail!("refusing to initialize a database owned by another application");
+    }
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > CURRENT_SCHEMA_VERSION {
+        bail!("database schema version {version} is newer than supported version {CURRENT_SCHEMA_VERSION}");
+    }
+    let mut statement = conn.prepare(
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    )?;
+    let names = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if names.is_empty() {
+        return Ok(());
+    }
+    if application_id == CLIPMEM_APPLICATION_ID {
+        return Ok(());
+    }
+    let known_tables = names.iter().all(|name| {
+        super::schema::SCHEMA.contains(&format!("CREATE TABLE IF NOT EXISTS {name} ("))
+            || [
+                "snapshots_fts",
+                "snapshots_literal_fts",
+                "snapshot_file_url_fts",
+                "snapshot_search_documents_fts",
+                "snapshot_search_documents_literal_fts",
+                "snapshot_ocr_fts",
+                "snapshot_ocr_literal_fts",
+            ]
+            .iter()
+            .any(|prefix| name == prefix || name.starts_with(&format!("{prefix}_")))
+    });
+    let legacy_shape = conn.prepare("SELECT id, sha256, snapshot_kind, item_count FROM snapshots LIMIT 0").is_ok()
+        || (version > 0 && (conn.prepare("SELECT id, paused, retention_seconds FROM clipmem_settings LIMIT 0").is_ok()
+            || conn.prepare("SELECT snapshot_id, item_index, uti, kind, byte_len, raw_sha256, blob_value FROM item_representations LIMIT 0").is_ok()));
+    if !known_tables || !legacy_shape {
+        bail!("refusing to initialize an unrecognized populated database; choose an empty file or an existing clipmem archive");
+    }
+    Ok(())
+}
+
 impl Database {
     /// Open the archive database at `path`, creating parent directories and schema state as needed.
     ///
@@ -22,11 +66,21 @@ impl Database {
     /// Returns an error if the parent directory cannot be created, the database cannot be opened,
     /// or the connection cannot be configured and bootstrapped.
     pub fn open_or_init_and_migrate(path: &Path) -> Result<Self> {
-        if let Some(parent) = path.parent() {
+        if path.exists() {
+            let existing = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            validate_initialization_target(&existing)?;
+        }
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            let existed = parent.exists();
             Context::with_context(std::fs::create_dir_all(parent), || {
                 format!("failed to create {}", parent.display())
             })?;
-            harden_path_permissions(parent, 0o700)?;
+            if !existed {
+                harden_path_permissions(parent, 0o700)?;
+            }
         }
 
         let mut conn = open_connection(
@@ -178,42 +232,13 @@ fn open_current_read_only_connection(
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
         | OpenFlags::SQLITE_OPEN_URI
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    // The normal read-only open keeps SQLite's locking/change detection
-    // intact: a live archive can gain a writer at any moment, so immutable=1
-    // is only sound when the filesystem itself prevents modification. Probe
-    // WAL access up front; it only fails where sidecars cannot be created
-    // (read-only media), which is exactly the immutable=1 contract.
-    if let Ok(conn) = Connection::open_with_flags(path, flags) {
-        let probe: std::result::Result<i64, _> =
-            conn.query_row("PRAGMA schema_version", [], |row| row.get(0));
-        if probe.is_ok() {
-            return Ok(conn);
-        }
-    }
-
-    let absolute = path
-        .canonicalize()
-        .map_err(super::types::DatabaseOpenError::Io)?;
-    // URI encoding requires a UTF-8 path; Unix paths need not be UTF-8. A
-    // non-UTF-8 path on read-only media cannot use the URI fallback, so
-    // surface the plain open's failure rather than opening a lossy
-    // re-encoding of a different file name.
-    let Some(encoded) = encode_sqlite_uri_path(&absolute) else {
-        return Connection::open_with_flags(path, flags)
-            .map_err(super::types::DatabaseOpenError::Sqlite);
-    };
-    let uri = format!("file:{encoded}?immutable=1");
-    Connection::open_with_flags(uri, flags).map_err(super::types::DatabaseOpenError::Sqlite)
-}
-
-fn encode_sqlite_uri_path(path: &Path) -> Option<String> {
-    Some(
-        path.to_str()?
-            .replace('%', "%25")
-            .replace('?', "%3F")
-            .replace('#', "%23")
-            .replace(' ', "%20"),
-    )
+    // An open/probe failure can mean a live writer holds an exclusive lock.
+    // Never bypass SQLite locking or WAL visibility with immutable=1.
+    let conn = Connection::open_with_flags(path, flags)
+        .map_err(super::types::DatabaseOpenError::Sqlite)?;
+    conn.query_row("PRAGMA schema_version", [], |row| row.get::<_, i64>(0))
+        .map_err(super::types::DatabaseOpenError::Sqlite)?;
+    Ok(conn)
 }
 
 const CLIPMEM_APPLICATION_ID: i64 = 1_129_137_485;
@@ -244,7 +269,7 @@ fn configure_current_connection(
         // doctor/stats queries that legitimately create connection-local working tables.
         "PRAGMA foreign_keys = ON; PRAGMA temp_store = MEMORY;"
     } else {
-        "PRAGMA foreign_keys = ON; PRAGMA temp_store = MEMORY; PRAGMA synchronous = NORMAL;"
+        "PRAGMA foreign_keys = ON; PRAGMA temp_store = MEMORY; PRAGMA synchronous = NORMAL; PRAGMA secure_delete = ON;"
     })
     .map_err(super::types::DatabaseOpenError::Sqlite)
 }
@@ -429,6 +454,7 @@ pub(in crate::db) fn configure_connection(conn: &Connection) -> Result<()> {
     configure_pragma(conn, "journal_mode", "WAL")?;
     configure_pragma(conn, "synchronous", "NORMAL")?;
     configure_pragma(conn, "foreign_keys", "ON")?;
+    configure_pragma(conn, "secure_delete", "ON")?;
     configure_pragma(conn, "temp_store", "MEMORY")?;
     conn.busy_timeout(Duration::from_millis(1_500))
         .context("configure SQLite busy timeout")?;

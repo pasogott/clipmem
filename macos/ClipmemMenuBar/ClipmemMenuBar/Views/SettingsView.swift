@@ -8,6 +8,9 @@ struct ClipmemSettingsView: View {
     @AppStorage(PreferenceKey.defaultRecentHours) private var defaultRecentHours = 24
     @AppStorage(PreferenceKey.defaultQueryMode) private var defaultQueryMode = QueryMode.recent.rawValue
     @AppStorage(PreferenceKey.hotkeyEnabled) private var hotkeyEnabled = true
+    @State private var draftBinaryPath = ""
+    @State private var draftDatabasePath = ""
+    @State private var applyingPaths = false
     @State private var selectedTab: SettingsTab = .general
     @State private var handledSettingsOpenRequestID = 0
     @State private var newIgnoredBundleID = ""
@@ -44,11 +47,18 @@ struct ClipmemSettingsView: View {
                 .tag(SettingsTab.privacy)
                 .tabItem { Label(SettingsTab.privacy.title, systemImage: SettingsTab.privacy.symbol) }
         }
+        .safeAreaInset(edge: .bottom) {
+            if let error = appModel.lastError {
+                ErrorBanner(message: error.message, recovery: error.recovery).padding()
+            }
+        }
         .overlay(alignment: .bottom) {
             ActionFeedbackOverlay(message: appModel.actionMessage, transitionEdge: .bottom)
                 .padding(.bottom, Spacing.lg)
         }
         .task {
+            draftBinaryPath = binaryPathOverride
+            draftDatabasePath = databasePathOverride
             applyPendingSettingsOpenRequestIfNeeded()
             await refreshSettingsSurface()
         }
@@ -66,9 +76,17 @@ struct ClipmemSettingsView: View {
     private var generalTab: some View {
         Form {
             Section("Paths") {
-                TextField("clipmem binary", text: $binaryPathOverride)
-                TextField("Database path", text: $databasePathOverride)
-                Text("Leave blank to use the default paths.")
+                TextField("clipmem binary", text: $draftBinaryPath)
+                TextField("Database path", text: $draftDatabasePath)
+                Button("Apply Paths") {
+                    applyingPaths = true
+                    Task {
+                        _ = await appModel.applyPaths(binary: draftBinaryPath, database: draftDatabasePath)
+                        applyingPaths = false
+                    }
+                }
+                .disabled(applyingPaths)
+                Text("Leave blank to use the default paths. Apply validates the archive before switching.")
                     .font(DesignType.rowMeta)
                     .foregroundStyle(.secondary)
             }

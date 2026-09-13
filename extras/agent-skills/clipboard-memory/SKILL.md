@@ -4,7 +4,7 @@ description: Recall what the user copied on this Mac via the local clipmem archi
 license: MIT
 compatibility: macOS with a local `clipmem` binary on PATH. Works in any agent runtime with filesystem and shell access. The `clipmem` watcher daemon (LaunchAgent `io.openclaw.clipmem.watch`) should be running for continuous capture; a stale watcher is the most common cause of empty results.
 metadata:
-  version: "1.3.8"
+  version: "1.3.9"
   variant: "portable"
 ---
 
@@ -34,7 +34,7 @@ The user asks things like:
 
 Before querying, confirm the setup is healthy — otherwise empty results may be a stale watcher, not a true miss:
 
-1. Background capture must be running. `clipmem setup` is the canonical fix; Homebrew users can also use `brew services start clipmem`.
+1. Background capture must be running. `clipmem setup` is the canonical fix; Homebrew users can also use `clipmem service start`.
 2. The binary `clipmem` must be on PATH with write access to `~/Library/Application Support/clipmem/clipmem.sqlite3`.
 3. Run [`scripts/check-setup.sh`](scripts/check-setup.sh) once per session when results look wrong. It exits `0` on a healthy host, `1` if the watcher is stale, `2` if the binary is missing, `3` if `clipmem doctor` fails. The prose equivalent is in [references/setup-check.md](references/setup-check.md).
 

@@ -1,11 +1,13 @@
+mod ocr_run;
+
 use crate::model::SearchHit;
 
 use super::types::{
     ArchiveChangeKind, ArchiveRevision, CapturePolicy, CaptureSettings, CaptureSkipReason,
-    ImageOptimizationCandidateSummary, OcrCandidateSummary, OcrResultRecord, OcrRunReport,
-    OcrStatusReport, Page, PurgeReport, RecentCursorState, RecentResults, RetrievalFilters,
-    RetrievalKind, SearchCursorState, SearchMode, SearchResults, SnapshotDeletionReport,
-    TimelineResults, TimelineSort,
+    ImageOptimizationCandidateSummary, OcrCandidateSummary, OcrResultRecord, OcrStatusReport, Page,
+    PurgeReport, RecentCursorState, RecentResults, RetrievalFilters, RetrievalKind,
+    SearchCursorState, SearchMode, SearchResults, SnapshotDeletionReport, TimelineResults,
+    TimelineSort,
 };
 
 mod timeline_cursor;
@@ -496,6 +498,7 @@ impl CaptureSkipReason {
             Self::Paused => "paused",
             Self::IgnoredApp => "ignored_app",
             Self::ApiKeyFilter => "api_key_filter",
+            Self::PrivateClipboardMarker => "private_clipboard_marker",
             Self::RestoredSnapshot => "restored_snapshot",
             Self::TransientPlatformChange => "transient_platform_change",
         }
@@ -759,49 +762,5 @@ impl ImageOptimizationCandidateSummary {
     #[must_use]
     pub(crate) fn byte_len(&self) -> usize {
         self.byte_len
-    }
-}
-
-impl OcrRunReport {
-    #[must_use]
-    pub(crate) fn new(
-        processed: usize,
-        ready: usize,
-        failed: usize,
-        skipped: usize,
-        remaining_pending: usize,
-    ) -> Self {
-        Self {
-            processed,
-            ready,
-            failed,
-            skipped,
-            remaining_pending,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn processed(&self) -> usize {
-        self.processed
-    }
-
-    #[must_use]
-    pub(crate) fn ready(&self) -> usize {
-        self.ready
-    }
-
-    #[must_use]
-    pub(crate) fn failed(&self) -> usize {
-        self.failed
-    }
-
-    #[must_use]
-    pub(crate) fn skipped(&self) -> usize {
-        self.skipped
-    }
-
-    #[must_use]
-    pub(crate) fn remaining_pending(&self) -> usize {
-        self.remaining_pending
     }
 }

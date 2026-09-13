@@ -473,7 +473,7 @@ fn storage_image_candidates_lists_eligible_rows_without_mutation() -> Result<()>
 }
 
 #[test]
-fn storage_optimize_images_json_compacts_by_default() -> Result<()> {
+fn storage_optimize_images_json_skips_vacuum_without_free_pages() -> Result<()> {
     let path = temp_db_path("storage-optimize-images-compacts");
     let original = lossless_test_tiff()?;
     seed_database(&path, &[image_snapshot(1, &original)])?;
@@ -491,8 +491,8 @@ fn storage_optimize_images_json_compacts_by_default() -> Result<()> {
 
     assert!(output.status.success(), "{}", stderr_text(&output));
     assert_eq!(payload["compressed_rows"].as_u64(), Some(1));
-    assert_eq!(payload["compact_run"].as_bool(), Some(true));
-    assert!(payload["compact"].is_object());
+    assert_eq!(payload["compact_run"].as_bool(), Some(false));
+    assert!(payload["compact"].is_null());
     assert_eq!(payload["compact_recommended"].as_bool(), Some(false));
     assert!(payload["filesystem_growth_bytes"].as_u64().is_some());
     assert!(payload["filesystem_saved_bytes"].as_u64().is_some());
@@ -640,14 +640,12 @@ fn storage_optimize_images_progress_jsonl_handles_empty_candidates() -> Result<(
         .collect::<Vec<_>>();
 
     assert!(output.status.success(), "{}", stderr_text(&output));
-    assert_eq!(events.len(), 3);
+    assert_eq!(events.len(), 2);
     assert_eq!(events[0]["type"].as_str(), Some("started"));
     assert_eq!(events[0]["total_rows"].as_u64(), Some(0));
-    assert_eq!(events[1]["type"].as_str(), Some("compacting"));
-    assert_eq!(events[1]["scanned_rows"].as_u64(), Some(0));
-    assert_eq!(events[1]["total_rows"].as_u64(), Some(0));
-    assert_eq!(events[2]["type"].as_str(), Some("complete"));
-    assert_eq!(events[2]["report"]["scanned_rows"].as_u64(), Some(0));
+    assert_eq!(events[1]["type"].as_str(), Some("complete"));
+    assert_eq!(events[1]["report"]["scanned_rows"].as_u64(), Some(0));
+    assert_eq!(events[1]["report"]["compact_run"].as_bool(), Some(false));
 
     cleanup_db(&path);
     Ok(())

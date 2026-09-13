@@ -102,7 +102,13 @@ fn app_settings_show(args: &AppSettingsShowArgs) -> Result<()> {
 fn app_settings_set(db_path: &Path, args: &AppSettingsSetArgs) -> Result<()> {
     let format = require_app_output_format(args.output.resolved()?, "app settings")?;
     let value = parse_app_preference_value(args.key, &args.value)?;
-    let previous_paths = app_preference_revision_paths(db_path)?;
+    let mut previous_paths = app_preference_revision_paths(db_path)?;
+    if matches!(args.key, AppPreferenceKey::DatabasePathOverride) {
+        if let Some(path) = value.as_str().filter(|path| !path.trim().is_empty()) {
+            push_unique_path(&mut previous_paths, PathBuf::from(path));
+        }
+    }
+    preflight_preference_archives(&previous_paths)?;
     set_preference(args.key, value)?;
     let paths = app_preference_revision_paths_after_mutation(db_path, previous_paths)?;
     bump_app_preferences_revisions(&paths)?;
@@ -117,6 +123,7 @@ fn app_settings_set(db_path: &Path, args: &AppSettingsSetArgs) -> Result<()> {
 fn app_settings_clear(db_path: &Path, args: &AppSettingsClearArgs) -> Result<()> {
     let format = require_app_output_format(args.output.resolved()?, "app settings")?;
     let previous_paths = app_preference_revision_paths(db_path)?;
+    preflight_preference_archives(&previous_paths)?;
     clear_preference(args.key)?;
     let paths = app_preference_revision_paths_after_mutation(db_path, previous_paths)?;
     bump_app_preferences_revisions(&paths)?;
@@ -605,6 +612,18 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     if !paths.iter().any(|existing| existing == &path) {
         paths.push(path);
     }
+}
+
+fn preflight_preference_archives(paths: &[PathBuf]) -> Result<()> {
+    for path in paths {
+        Database::open_or_init_and_migrate(path).with_context(|| {
+            format!(
+                "validate preference archive {} before saving settings",
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 fn bump_app_preferences_revisions(paths: &[PathBuf]) -> Result<()> {

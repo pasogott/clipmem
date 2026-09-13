@@ -659,9 +659,21 @@ fn service_start_fails_with_clear_guidance_when_both_providers_are_installed() -
     assert!(!output.status.success());
     let stderr = stderr_text(&output);
     assert!(stderr.contains("Both the Homebrew service and the direct LaunchAgent are installed"));
-    assert!(stderr.contains("brew services stop clipmem"));
+    assert!(stderr.contains("clipmem service stop"));
     assert!(stderr.contains("clipmem service uninstall"));
 
+    let stopped = run_cli_with_owned_env(&["service", "stop"], &envs);
+    assert!(stopped.status.success(), "{}", stderr_text(&stopped));
+    assert!(!state_dir.join("homebrew.state").exists());
+    assert!(!state_dir.join("direct.state").exists());
+    let removed = run_cli_with_owned_env(&["service", "uninstall"], &envs);
+    assert!(removed.status.success(), "{}", stderr_text(&removed));
+    assert!(!home_dir
+        .join("Library/LaunchAgents/io.openclaw.clipmem.watch.plist")
+        .exists());
+    assert!(!home_dir
+        .join("Library/LaunchAgents/homebrew.mxcl.clipmem.plist")
+        .exists());
     let _ = fs::remove_dir_all(&test_dir);
     Ok(())
 }

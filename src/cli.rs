@@ -12,6 +12,7 @@ mod presentation;
 mod runtime;
 mod schema;
 mod service;
+mod terminal;
 mod validate;
 mod value_validation;
 

@@ -95,6 +95,21 @@ CREATE TABLE IF NOT EXISTS capture_events (
     content_origin_kind     TEXT
 );
 
+-- Durable allocation survives deleting the newest row or emptying the archive.
+CREATE TABLE IF NOT EXISTS archive_id_sequences (
+    name TEXT PRIMARY KEY CHECK (name IN ('snapshots', 'capture_events')),
+    high_water INTEGER NOT NULL CHECK (high_water >= 0)
+);
+INSERT OR IGNORE INTO archive_id_sequences VALUES ('snapshots', 0), ('capture_events', 0);
+UPDATE archive_id_sequences SET high_water = max(high_water, coalesce((SELECT max(id) FROM snapshots), 0)) WHERE name = 'snapshots';
+UPDATE archive_id_sequences SET high_water = max(high_water, coalesce((SELECT max(id) FROM capture_events), 0)) WHERE name = 'capture_events';
+CREATE TRIGGER IF NOT EXISTS snapshots_id_sequence AFTER INSERT ON snapshots BEGIN
+    UPDATE archive_id_sequences SET high_water = max(high_water, new.id) WHERE name = 'snapshots';
+END;
+CREATE TRIGGER IF NOT EXISTS capture_events_id_sequence AFTER INSERT ON capture_events BEGIN
+    UPDATE archive_id_sequences SET high_water = max(high_water, new.id) WHERE name = 'capture_events';
+END;
+
 CREATE TABLE IF NOT EXISTS snapshot_stats (
     snapshot_id                 INTEGER PRIMARY KEY REFERENCES snapshots(id) ON DELETE CASCADE,
     capture_count               INTEGER NOT NULL CHECK (capture_count >= 0),
@@ -708,7 +723,10 @@ AFTER UPDATE OF observed_at, frontmost_app_bundle_id, frontmost_app_name ON capt
         haystack = excluded.haystack;
 END;
 
-CREATE TRIGGER IF NOT EXISTS capture_events_ad AFTER DELETE ON capture_events BEGIN
+DROP TRIGGER IF EXISTS capture_events_ad;
+CREATE TRIGGER capture_events_ad AFTER DELETE ON capture_events
+WHEN EXISTS (SELECT 1 FROM snapshots WHERE id = old.snapshot_id)
+BEGIN
     DELETE FROM snapshot_stats WHERE snapshot_id = old.snapshot_id;
     INSERT INTO snapshot_stats (
         snapshot_id,

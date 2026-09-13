@@ -23,7 +23,7 @@ struct QuickRecallWindowView: View {
             header
             Divider()
             list
-            if let error = quick.error {
+            if let error = quick.error ?? appModel.lastError {
                 ErrorBanner(
                     message: error.message,
                     recovery: error.recovery,
@@ -180,14 +180,14 @@ struct QuickRecallWindowView: View {
     // MARK: - List
 
     private var list: some View {
-        List(selection: $quick.selectedID) {
+        List(selection: Binding(get: { quick.selectedRowID }, set: { quick.selectRow(id: $0) })) {
             ForEach(Array(quick.results.enumerated()), id: \.element.id) { index, item in
-                ResultRowView(item: item, selected: item.snapshotId == quick.selectedID)
-                    .tag(item.snapshotId)
+                ResultRowView(item: item, selected: item.id == quick.selectedRowID)
+                    .tag(item.id)
                     .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
                     .animation(DesignAnimation.staggerDelay(index: index, reduceMotion: reduceMotion), value: quick.results.count)
                     .contextMenu {
-                        Button("Restore") { Task { await appModel.restore(item) } }
+                        Button("Restore") { Task { await quick.restore(item) } }
                         Button("Open in History") { openHistory(item: item) }
                         Button("Forget", role: .destructive) {
                             pendingForgetItem = item

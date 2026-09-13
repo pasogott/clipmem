@@ -31,7 +31,10 @@ where
     let cli = Cli::try_parse_from(args).map_err(classify_clap_error)?;
     validate_cli(&cli).map_err(classify_clap_error)?;
     let db_path = cli.db.unwrap_or_else(db_path::default_db_path);
-    run_command(cli.command, &db_path).map_err(classify_command_error)
+    match run_command(cli.command, &db_path) {
+        Err(error) if super::terminal::is_broken_pipe(&error) => Ok(()),
+        result => result.map_err(classify_command_error),
+    }
 }
 
 pub fn run_cli() -> ExitCode {
@@ -39,9 +42,14 @@ pub fn run_cli() -> ExitCode {
         Ok(code) => code.as_exit_code(),
         Err(error) => {
             if error.use_stderr() {
-                eprint!("{error}");
-            } else {
-                print!("{error}");
+                super::terminal::write_error(&error.to_string());
+            } else if let Err(write_error) = super::terminal::write_raw(&error.to_string()) {
+                return if super::terminal::is_broken_pipe(&write_error) {
+                    CliExitCode::Ok
+                } else {
+                    CliExitCode::Internal
+                }
+                .as_exit_code();
             }
             classify_clap_exit_code(error.kind()).as_exit_code()
         }
@@ -58,9 +66,10 @@ where
     let db_path = cli.db.unwrap_or_else(db_path::default_db_path);
     match run_command(cli.command, &db_path) {
         Ok(()) => Ok(CliExitCode::Ok),
+        Err(error) if super::terminal::is_broken_pipe(&error) => Ok(CliExitCode::Ok),
         Err(error) => {
             let classified = classify_command_error(error);
-            eprintln!("{}", classified.message());
+            super::terminal::write_error(&format!("{}\n", classified.message()));
             Ok(classified.exit_code())
         }
     }

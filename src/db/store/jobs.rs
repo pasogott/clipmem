@@ -384,6 +384,18 @@ fn terminalize_exhausted_expired_leases_tx(tx: &Transaction<'_>, kind: &str) -> 
             [job_id],
         )
         .context("terminalize exhausted expired lease")?;
+        if kind == OCR_JOB_KIND {
+            let hash: String = tx.query_row(
+                "SELECT dedupe_key FROM jobs WHERE id = ?1",
+                [job_id],
+                |row| row.get(0),
+            )?;
+            let changed = tx.execute("UPDATE ocr_results SET status = 'failed', error = 'lease expired after final attempt', updated_at = CURRENT_TIMESTAMP WHERE raw_sha256 = ?1 AND status = 'pending'", [&hash])?;
+            if changed > 0 {
+                super::ocr::rebuild_snapshot_ocr_cache_for_hash(tx, &hash)?;
+                super::revision::bump_revision_tx(tx, &[crate::db::types::ArchiveChangeKind::Ocr])?;
+            }
+        }
         refresh_attached_operations_tx(tx, job_id)?;
     }
     Ok(())
@@ -499,7 +511,7 @@ pub(in crate::db) fn load_claimed_image_candidate(
 ) -> Result<Option<ImageOptimizationCandidate>> {
     let raw_sha256 = lease.dedupe_key();
     conn.query_row(
-        r"SELECT snapshot_id, item_index, uti, byte_len, raw_sha256, blob_value
+        r"SELECT snapshot_id, item_index, uti, byte_len, raw_sha256, CASE WHEN length(blob_value) <= ?2 THEN blob_value ELSE X'' END
            FROM item_representations ir
            WHERE raw_sha256 = ?1 AND kind = 'image' AND length(blob_value) > 0
              AND NOT EXISTS (
@@ -510,7 +522,7 @@ pub(in crate::db) fn load_claimed_image_candidate(
                  AND rd.encoder_options_hash = 'webp-lossless-long-edge-2048-v1'
              )
            ORDER BY byte_len DESC, snapshot_id, item_index, uti LIMIT 1",
-        [raw_sha256],
+        rusqlite::params![raw_sha256, super::config::IMAGE_PREVIEW_MAX_SOURCE_BYTES as i64],
         |row| {
             Ok(ImageOptimizationCandidate {
                 snapshot_id: row.get(0)?,

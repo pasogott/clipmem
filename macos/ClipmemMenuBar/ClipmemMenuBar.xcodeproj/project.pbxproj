@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B00000000000000000000F01 /* ArchiveRefreshMonitors.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000F01; };
 		B00000000000000000000001 /* ClipmemMenuBarApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000001 /* ClipmemMenuBarApp.swift */; };
 		B00000000000000000000002 /* AppCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000002 /* AppCommands.swift */; };
 		B00000000000000000000003 /* AppLoggers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000003 /* AppLoggers.swift */; };
@@ -63,6 +64,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A00000000000000000000F01 /* ArchiveRefreshMonitors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/ArchiveRefreshMonitors.swift; sourceTree = "<group>"; };
 		A00000000000000000000001 /* ClipmemMenuBarApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/ClipmemMenuBarApp.swift; sourceTree = "<group>"; };
 		A00000000000000000000002 /* AppCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/AppCommands.swift; sourceTree = "<group>"; };
 		A00000000000000000000003 /* AppLoggers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logging/AppLoggers.swift; sourceTree = "<group>"; };
@@ -141,6 +143,7 @@
 				A00000000000000000000009 /* ClipmemClient.swift */,
 				A00000000000000000000033 /* UpdateChecker.swift */,
 				A00000000000000000000010 /* AppModel.swift */,
+                A00000000000000000000F01 /* ArchiveRefreshMonitors.swift */,
 				A00000000000000000000011 /* HistoryModel.swift */,
 				A00000000000000000000012 /* QuickRecallModel.swift */,
 				A00000000000000000000013 /* HotKeyManager.swift */,
@@ -276,6 +279,7 @@
 				B00000000000000000000008,
 				B00000000000000000000009,
 				B00000000000000000000010,
+                B00000000000000000000F01,
 				B00000000000000000000011,
 				B00000000000000000000012,
 				B00000000000000000000013,

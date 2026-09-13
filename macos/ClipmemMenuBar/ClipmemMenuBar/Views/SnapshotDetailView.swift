@@ -5,13 +5,15 @@ struct SnapshotDetailView: View {
     let detail: SnapshotDetails?
     let fallback: ClipmemItem?
     let appModel: AppModel
+    let configurationGeneration: Int
     var isLoading: Bool = false
-    var onForgot: () async -> Void
+    var onForgot: (Int) async -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var visibleSections = 0
     @State private var advancedMetadataPresented = false
     @State private var confirmForget = false
+    @State private var forgetTargetID: Int?
     @State private var imagePreviewState: ImagePreviewState = .notAvailable
 
     var body: some View {
@@ -63,8 +65,8 @@ struct SnapshotDetailView: View {
         }
         .confirmationDialog("Forget this snapshot?", isPresented: $confirmForget) {
             Button("Forget", role: .destructive) {
-                Task {
-                    await onForgot()
+                if let snapshotID = forgetTargetID {
+                    Task { await onForgot(snapshotID) }
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -199,18 +201,25 @@ struct SnapshotDetailView: View {
             }
             if detail.itemCount > 0 {
                 Button(copyOriginalButtonTitle(for: detail), systemImage: "doc.on.doc.fill") {
-                    Task { await appModel.copySnapshotToPasteboard(snapshotID: detail.snapshotId) }
+                    Task {
+                        guard configurationGeneration == appModel.configurationGeneration else { return }
+                        await appModel.copySnapshotToPasteboard(snapshotID: detail.snapshotId)
+                    }
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .help("Copy this saved clipboard item with its exact original formats")
             }
             Button("Restore", systemImage: "arrow.uturn.backward.square") {
-                Task { await appModel.restore(snapshotID: detail.snapshotId) }
+                Task {
+                    guard configurationGeneration == appModel.configurationGeneration else { return }
+                    await appModel.restore(snapshotID: detail.snapshotId)
+                }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
             Button("Forget", systemImage: "trash", role: .destructive) {
+                forgetTargetID = detail.snapshotId
                 confirmForget = true
             }
             .buttonStyle(.borderless)

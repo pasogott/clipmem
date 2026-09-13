@@ -139,9 +139,8 @@ fn current_open_modes_return_typed_schema_and_identity_errors() -> Result<()> {
 fn read_only_current_does_not_chmod_or_create_sqlite_sidecars() -> Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
 
-    // Sidecar-free reads are guaranteed on read-only media (the immutable
-    // fallback); the parent goes read-only, so isolate it from the shared
-    // temp dir used by concurrently running tests.
+    // File permissions do not prove immutability. A WAL archive without usable
+    // sidecars must fail safely instead of bypassing locking.
     let shared = temp_db_path("read-only-no-filesystem-writes");
     let parent = shared.with_extension("dir");
     std::fs::create_dir_all(&parent)?;
@@ -155,11 +154,7 @@ fn read_only_current_does_not_chmod_or_create_sqlite_sidecars() -> Result<()> {
     std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o555))?;
 
     let result = (|| -> Result<()> {
-        let db = Database::open_read_only_current(&path)?;
-        let _: i64 = db
-            .conn
-            .query_row("SELECT COUNT(*) FROM snapshots", [], |row| row.get(0))?;
-        drop(db);
+        assert!(Database::open_read_only_current(&path).is_err());
 
         assert_eq!(
             std::fs::metadata(&path)?.permissions().mode() & 0o777,
