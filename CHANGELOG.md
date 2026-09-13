@@ -23,6 +23,7 @@ versioning where practical.
 
 ### Fixed
 
+- ClawHub skill publication accepts the current version's release notes after Unreleased entries are promoted for a release.
 - Paused capture is reported as paused by the packaged setup checker; sandbox diagnostics validate OpenClaw's JSON mode instead of guessing from prose.
 - Recall's recent preference uses capture timestamps, recent fallbacks have no fabricated match score, and full recall text survives human and TOON output.
 - Search snippets identify the field that supplied their evidence, and text pagination exposes continuation cursors.

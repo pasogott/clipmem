@@ -57,6 +57,9 @@ jobs:
       - name: Verify skill package parity
         run: cargo test --test skill_parity
 
+      - name: Test release note selection
+        run: python3 -m unittest discover -s scripts -p 'test_clawhub_skill_sync.py'
+
       - name: Check ClawHub skill state
         run: python3 scripts/clawhub_skill_sync.py check
 
@@ -82,6 +85,9 @@ jobs:
 
       - name: Verify skill package parity
         run: cargo test --test skill_parity
+
+      - name: Test release note selection
+        run: python3 -m unittest discover -s scripts -p 'test_clawhub_skill_sync.py'
 
       - name: Authenticate with ClawHub
         env:

@@ -238,7 +238,8 @@ def derive_changelog(repo_root: Path) -> str:
     if not changelog_path.is_file():
         raise SyncError("CHANGELOG.md was not found")
 
-    section = unreleased_section(changelog_path.read_text())
+    changelog = changelog_path.read_text()
+    section = unreleased_section(changelog)
     keywords = ("clawhub", "clipboard-memory", "skill")
     matches = [
         bullet.rstrip(".")
@@ -246,9 +247,26 @@ def derive_changelog(repo_root: Path) -> str:
         if any(keyword in bullet.lower() for keyword in keywords)
     ]
     if not matches:
+        # Release preparation moves Unreleased notes into the package's version.
+        # Match that exact version rather than borrowing notes from an old release.
+        from check_version_sync import cargo_version
+
+        version = cargo_version(repo_root)
+        released = re.search(
+            rf"^## {re.escape(version)}(?: - [^\n]+)?[ \t]*\n([\s\S]*?)(?=^##\s|\Z)",
+            changelog,
+            re.MULTILINE,
+        )
+        if released:
+            matches = [
+                bullet.rstrip(".")
+                for bullet in unreleased_bullets(released.group(1))
+                if any(keyword in bullet.lower() for keyword in keywords)
+            ]
+    if not matches:
         raise SyncError(
-            "CHANGELOG.md Unreleased must include a ClawHub, clipboard-memory, "
-            "or skill bullet before publishing."
+            "CHANGELOG.md Unreleased or the current package release must include "
+            "a ClawHub, clipboard-memory, or skill bullet before publishing."
         )
     return " ".join(matches)
 
